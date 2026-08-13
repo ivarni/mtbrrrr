@@ -1,0 +1,40 @@
+# Rendered by Terraform (infra/main.tf) — the hostname below is var.subdomain + var.dns_zone,
+# and the CORS allow-list is built from var.site_subdomain + var.extra_allowed_origins.
+# Don't edit the rendered copy on the server; edit this template and run ./deploy.sh.
+# Caddy provisions a Let's Encrypt certificate automatically, so the app (served over HTTPS)
+# can call this endpoint without mixed-content errors.
+${domain} {
+	# Which origins may read these responses. Anchored alternation, dots escaped by Terraform,
+	# so "mtb.ivarnilsen.com" cannot be matched by "mtbXivarnilsen.com".
+	@site_origin header_regexp Origin ^(${origin_regex})$
+	@other_origin not header_regexp Origin ^(${origin_regex})$
+
+	# Two things are going on here, both of them non-obvious.
+	#
+	# 1. `defer` is load-bearing. The Overpass image's own nginx already sets
+	#    Access-Control-Allow-Origin: * — but ONLY when the request carries an Origin header,
+	#    so it is invisible to curl unless you send one, and always present for a browser.
+	#    Header ops without `defer` run BEFORE reverse_proxy copies the upstream headers, so
+	#    ours does not replace theirs, it stacks with it: the response goes out with the
+	#    header twice and every browser rejects it ("contains multiple values"). `defer`
+	#    moves the op to just before the response is written, so Set actually replaces.
+	#    (`header >Field value` is the one-line shorthand for the same thing.)
+	#
+	# 2. The upstream's permissive * has to be removed for everyone else, or restricting the
+	#    origin here achieves nothing — any site could still read the responses via the
+	#    header the backend set. Hence the second block. Requests with no Origin at all
+	#    (curl, monitoring) land there too, which is correct: they need no CORS header.
+	header @site_origin {
+		defer
+		Access-Control-Allow-Origin "{http.request.header.Origin}"
+		Vary Origin
+	}
+
+	header @other_origin {
+		defer
+		-Access-Control-Allow-Origin
+		Vary Origin
+	}
+
+	reverse_proxy overpass:80
+}

@@ -1,0 +1,29 @@
+# Copy to terraform.tfvars and fill in real values.
+# Never commit terraform.tfvars to source control.
+
+# From the Scaleway console → project settings. The same project as deploy/overpass is fine.
+project_id = "00000000-0000-0000-0000-000000000000"
+
+region = "fr-par"
+
+# The site is served at https://<subdomain>.<dns_zone> once custom_domain_enabled is true.
+# Until then it is on the Scaleway endpoint from the default_url output.
+dns_zone  = "example.com"
+subdomain = "mtb"
+
+# Leave false for the first apply. The CNAME has to resolve to the container endpoint before
+# Scaleway will attach the domain — SITE.md walks through the order.
+custom_domain_enabled = false
+
+# false: add the CNAME at your registrar by hand (one.com, in your case).
+manage_dns = false
+
+# Smallest tier. See the free-tier note in variables.tf before raising these.
+memory_limit = 128
+cpu_limit    = 70
+min_scale    = 0
+max_scale    = 1
+
+# Only needed if "mtbrrrr-site" is already taken as a registry namespace anywhere in the
+# region — that shows up as a name conflict on the first apply.
+# registry_name = "mtbrrrr-site-ivarni"

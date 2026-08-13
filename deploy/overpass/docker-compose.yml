@@ -1,0 +1,62 @@
+# Self-hosted Overpass API for mtbrrrr — Norway extract, behind Caddy (auto-HTTPS + CORS).
+# First `docker compose up -d` imports the Norway extract into /db (takes a while — watch
+# `docker compose logs -f overpass`). The import is skipped on later restarts if /db exists.
+#
+# This runs on the server at /opt/overpass, put there by Terraform (see INFRA.md) — it won't
+# come up locally, since the paths below only exist there. Edit it here and run ./deploy.sh.
+services:
+  overpass:
+    image: wiktorn/overpass-api:latest
+    container_name: overpass
+    restart: unless-stopped
+    environment:
+      # "no" keeps the DB small (we only need current geometry, no history/meta).
+      OVERPASS_META: "no"
+      # Import from a regional PBF on first run.
+      OVERPASS_MODE: "init"
+      OVERPASS_PLANET_URL: "https://download.geofabrik.de/europe/norway-latest.osm.pbf"
+      # Overpass' update_database reads .osm.bz2, not PBF, and Geofabrik only publishes PBF
+      # for regions (the .osm.bz2 extracts are gone — they 404). Without this the container
+      # downloads 1.3 GB, fails with "bunzip2: (stdin) is not a bzip2 file", and restart:
+      # unless-stopped puts it in a download loop. Recipe is from the image's own README.
+      OVERPASS_PLANET_PREPROCESS: "mv /db/planet.osm.bz2 /db/planet.osm.pbf && osmium cat -o /db/planet.osm.bz2 /db/planet.osm.pbf && rm /db/planet.osm.pbf"
+      # Geofabrik cuts this region ONCE A DAY, around 20:20 UTC (verified: seq 4858/4859/4860
+      # at 2026-07-23/24/25 ~20:21Z). So an OSM edit is visible here within ~1h of that cut if
+      # it landed before it, or up to ~25h if it just missed it. Polling faster than daily
+      # cannot help; OVERPASS_UPDATE_SLEEP below only bounds how long after the cut we notice.
+      OVERPASS_DIFF_URL: "https://download.geofabrik.de/europe/norway-updates/"
+      OVERPASS_RULES_LOAD: "10"
+      # Pull diffs hourly. Bump if you want fresher data.
+      OVERPASS_UPDATE_SLEEP: "3600"
+    volumes:
+      # The Scaleway Block Storage volume, mounted here by cloud-init.
+      - /srv/overpass/db:/db
+    expose:
+      - "80" # internal only — Caddy is the public entrypoint
+
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Rendered from ../Caddyfile.tftpl by Terraform — don't edit the copy on the server.
+      #
+      # The DIRECTORY is mounted, not the Caddyfile itself, and that is deliberate. Docker
+      # binds a single-file mount to the file's inode: rsync (and most editors) write a temp
+      # file and rename it over the target, which produces a new inode, after which the host
+      # shows the new file and the container keeps reading the old one indefinitely — a
+      # `caddy reload` cannot fix it, because the container is pinned to the orphaned inode.
+      # A directory mount resolves the path on every open, so a replaced file is just picked
+      # up. Side effect: docker-compose.yml is visible inside the container too. Harmless.
+      - ./:/etc/caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - overpass
+
+volumes:
+  caddy_data:
+  caddy_config:
