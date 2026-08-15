@@ -1,0 +1,58 @@
+# mtbrrrr on a single Rocky Linux box: one Caddy (auto-HTTPS + static site + Overpass proxy)
+# and the self-hosted Norway Overpass API. Replaces both Scaleway stacks and all Terraform.
+# Full runbook: ROCKY.md
+services:
+  caddy:
+    image: caddy:2.11.4
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"     # HTTP-01 ACME challenge + redirect to HTTPS
+      - "443:443"   # HTTPS (and TLS-ALPN ACME fallback if 80 is blocked upstream)
+    env_file: .env
+    volumes:
+      # Directory mounts (never single-file): a `git pull` that renames a file leaves a
+      # single-file bind mount pinned to the old inode, and `caddy reload` cannot fix it.
+      # A directory mount re-resolves the path on every open.
+      - ./caddy:/etc/caddy:ro,Z        # the Caddyfile
+      - ./site:/srv/site:ro,Z          # the four published app files (see ROCKY.md "Publish")
+      - caddy_data:/data               # Let's Encrypt certs + account key — MUST persist
+      - caddy_config:/config
+    depends_on:
+      # Startup order only, NOT readiness. During the ~45-min first import Overpass returns
+      # 502s; the app treats a 502 as !res.ok and falls through to the public mirrors, so the
+      # site is usable throughout. Intentionally not gated on an Overpass healthcheck.
+      - overpass
+
+  overpass:
+    image: wiktorn/overpass-api:v0.7.62.11
+    container_name: overpass
+    restart: unless-stopped
+    environment:
+      # "no" keeps the DB small — we only need current geometry, no history/meta.
+      OVERPASS_META: "no"
+      # Import a regional PBF on first run; skipped on later starts if the DB exists.
+      OVERPASS_MODE: "init"
+      OVERPASS_PLANET_URL: "https://download.geofabrik.de/europe/norway-latest.osm.pbf"
+      # LOAD-BEARING. update_database reads .osm.bz2, and Geofabrik only publishes .pbf for
+      # regions (the .osm.bz2 extracts 404). Without this, first run downloads 1.3 GB, dies
+      # with "bunzip2: (stdin) is not a bzip2 file", and restart:unless-stopped turns it into
+      # a download loop that looks like progress (disk fills with the same repeated download).
+      # Do NOT remove. Recipe is from the image's own README.
+      OVERPASS_PLANET_PREPROCESS: "mv /db/planet.osm.bz2 /db/planet.osm.pbf && osmium cat -o /db/planet.osm.bz2 /db/planet.osm.pbf && rm /db/planet.osm.pbf"
+      # Geofabrik cuts Norway once a day (~20:20 UTC). Polling faster than daily cannot make
+      # data fresher; this only bounds how long after the cut we notice.
+      OVERPASS_DIFF_URL: "https://download.geofabrik.de/europe/norway-updates/"
+      OVERPASS_RULES_LOAD: "10"
+      OVERPASS_UPDATE_SLEEP: "3600"   # pull diffs hourly
+    volumes:
+      # Named volume lives under the docker data-root (default /var/lib/docker/volumes) — see
+      # ROCKY.md "Disk" for the free-space requirement and how to relocate it to a data disk.
+      - overpass_db:/db
+    expose:
+      - "80"   # internal only — Caddy is the public entrypoint
+
+volumes:
+  caddy_data:
+  caddy_config:
+  overpass_db:

@@ -395,16 +395,22 @@ map.on('moveend', () => {
   trailMoveTimer = setTimeout(loadTrailCells, 400);
 });
 
-// Self-hosted Overpass (Norway extract) — see deploy/overpass/INFRA.md. Tried first for
-// Norway cells, with the public mirrors below as fallback, so an outage here degrades to
-// the old behaviour rather than breaking trails. Set to '' to bypass it entirely.
-//
-// PAUSED FOR THE 2026/27 OFF-SEASON (2026-08-10): the server and its DB volume are torn
-// down to save ~€27/mo; only the flexible IP + DNS record are kept. Blank rather than
-// left pointing at a dead host because overpassQuery has no fetch timeout — every Norway
-// cell would stall on the OS TCP timeout before falling back. To resume, put back:
-//   'https://overpass.ivarnilsen.com/api/interpreter'
-const SELF_HOSTED_OVERPASS = '';
+// Self-hosted Overpass (Norway), on a single Rocky Linux box — Caddy fronting the
+// wiktorn/overpass-api container; see deploy/rocky/. Domain-agnostic: no domain is hardcoded.
+// By the deploy convention the site is served at mtb.<domain> and Overpass at
+// overpass.<domain>, so we DERIVE the endpoint from our own origin (first DNS label swapped
+// to "overpass"). Empty on localhost, an IP literal, or a bare apex host — so local dev and
+// non-standard setups fall back to the public mirrors. Tried first for Norway cells; each
+// request carries OVERPASS_TIMEOUT so a dead host fails fast. sw.js derives the same host for
+// offline cache-first. To force public-only, hardcode this to ''.
+const SELF_HOSTED_OVERPASS = (() => {
+  const h = location.hostname;
+  if (h === 'localhost' || /^[0-9.]+$/.test(h)) return '';   // dev / IP: no self-hosted box
+  const labels = h.split('.');
+  if (labels.length < 3) return '';   // need a subdomain to replace (e.g. mtb.example.com)
+  labels[0] = 'overpass';
+  return `https://${labels.join('.')}/api/interpreter`;
+})();
 
 // Public Overpass servers are community-run and often busy — try mirrors in turn.
 const PUBLIC_OVERPASS = [
@@ -430,6 +436,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // honor Retry-After so we back off instead of hammering every mirror in turn.
 let overpassReadyAt = 0;               // don't send another request before this time
 const OVERPASS_MIN_GAP = 800;          // ms between requests (gentle on the servers)
+const OVERPASS_TIMEOUT = 8000;         // ms per request — a dead/slow self-hosted host must
+                                       // fail fast so we fall through to the public mirrors
+                                       // instead of stalling on the browser's long default.
 async function overpassQuery(query, endpoints = PUBLIC_OVERPASS, { revalidate = false } = {}) {
   // GET (not POST) so the service worker can cache the response by URL —
   // that's what makes a previously-loaded area's trails work offline.
@@ -443,7 +452,7 @@ async function overpassQuery(query, endpoints = PUBLIC_OVERPASS, { revalidate = 
     const wait = overpassReadyAt - Date.now();
     if (wait > 0) await sleep(wait);
     try {
-      const res = await fetch(ep + qs);
+      const res = await fetch(ep + qs, { signal: AbortSignal.timeout(OVERPASS_TIMEOUT) });
       if (res.status === 429 || res.status === 504) {
         // Rate-limited / overloaded — back off before the next request anywhere.
         const ra = parseInt(res.headers.get('Retry-After') || '', 10);

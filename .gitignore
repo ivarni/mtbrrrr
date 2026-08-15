@@ -1,1 +1,3 @@
 .idea/
+deploy/rocky/.env
+deploy/rocky/site/

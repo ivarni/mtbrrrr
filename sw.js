@@ -3,7 +3,7 @@
 // keep-list, so install() refetches the shell instead of relying on stale-while-revalidate to
 // notice. Leave TILE_CACHE alone — renaming it would throw away the map tiles, DEM and trail
 // data that make cached areas work offline.
-const APP_CACHE = 'app-v4';
+const APP_CACHE = 'app-v5';
 const TILE_CACHE = 'tiles-v1';
 
 // Local app shell to precache on install.
@@ -16,12 +16,24 @@ const SHELL = [
   'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css',
 ];
 
+// Self-hosted Overpass host (Norway) — DERIVED from our own origin so no domain is hardcoded:
+// site at mtb.<domain> => Overpass at overpass.<domain> (matches app.js and deploy/rocky/).
+// null on localhost / IP / apex, so dev just uses the public mirrors below.
+const SELF_HOSTED_OVERPASS_HOST = (() => {
+  const h = self.location.hostname;
+  if (h === 'localhost' || /^[0-9.]+$/.test(h)) return null;
+  const labels = h.split('.');
+  if (labels.length < 3) return null;
+  labels[0] = 'overpass';
+  return labels.join('.');
+})();
+
 // Hosts whose responses are map data — cache-first so revisits are instant/offline.
 const TILE_HOSTS = [
   'tiles.openfreemap.org',
   'api.maptiler.com',            // MapTiler Outdoor base (tiles, sprite, glyphs)
   's3.amazonaws.com',            // terrarium DEM
-  'overpass.ivarnilsen.com',     // self-hosted Overpass (Norway) — see deploy/overpass/
+  ...(SELF_HOSTED_OVERPASS_HOST ? [SELF_HOSTED_OVERPASS_HOST] : []),  // self-hosted Overpass (Norway)
   'overpass-api.de',             // MTB trail queries (public mirrors)
   'overpass.kumi.systems',
   'maps.mail.ru',
