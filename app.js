@@ -436,9 +436,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // honor Retry-After so we back off instead of hammering every mirror in turn.
 let overpassReadyAt = 0;               // don't send another request before this time
 const OVERPASS_MIN_GAP = 800;          // ms between requests (gentle on the servers)
-const OVERPASS_TIMEOUT = 8000;         // ms per request — a dead/slow self-hosted host must
-                                       // fail fast so we fall through to the public mirrors
-                                       // instead of stalling on the browser's long default.
+// Per-request timeout for the SELF-HOSTED endpoint ONLY: a dead/slow box must fail fast so we
+// fall through to the public mirrors instead of stalling on the browser's long default. Public
+// mirrors are left untimed on purpose — a valid large-bbox query there can legitimately take
+// longer, and aborting it would exhaust the fallback chain. Feature-detected: on a browser
+// without AbortSignal.timeout we just skip it (plain fetch) rather than throwing every request.
+const OVERPASS_TIMEOUT = 8000;         // ms
+const HAS_ABORT_TIMEOUT = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function';
+function overpassFetch(url, ep) {
+  return ep === SELF_HOSTED_OVERPASS && HAS_ABORT_TIMEOUT
+    ? fetch(url, { signal: AbortSignal.timeout(OVERPASS_TIMEOUT) })
+    : fetch(url);
+}
 async function overpassQuery(query, endpoints = PUBLIC_OVERPASS, { revalidate = false } = {}) {
   // GET (not POST) so the service worker can cache the response by URL —
   // that's what makes a previously-loaded area's trails work offline.
@@ -452,7 +461,7 @@ async function overpassQuery(query, endpoints = PUBLIC_OVERPASS, { revalidate = 
     const wait = overpassReadyAt - Date.now();
     if (wait > 0) await sleep(wait);
     try {
-      const res = await fetch(ep + qs, { signal: AbortSignal.timeout(OVERPASS_TIMEOUT) });
+      const res = await overpassFetch(ep + qs, ep);
       if (res.status === 429 || res.status === 504) {
         // Rate-limited / overloaded — back off before the next request anywhere.
         const ra = parseInt(res.headers.get('Retry-After') || '', 10);
