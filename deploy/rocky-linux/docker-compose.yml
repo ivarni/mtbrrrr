@@ -1,6 +1,6 @@
 # mtbrrrr on a single Rocky Linux box: one Caddy (auto-HTTPS + static site + Overpass proxy)
 # and the self-hosted Norway Overpass API. Replaces both Scaleway stacks and all Terraform.
-# Full runbook: ROCKY.md
+# Full runbook: README.md
 services:
   caddy:
     image: caddy:2.11.4
@@ -15,7 +15,7 @@ services:
       # single-file bind mount pinned to the old inode, and `caddy reload` cannot fix it.
       # A directory mount re-resolves the path on every open.
       - ./caddy:/etc/caddy:ro,Z        # the Caddyfile
-      - ./site:/srv/site:ro,Z          # the four published app files (see ROCKY.md "Publish")
+      - ./site:/srv/site:ro,Z          # the four published app files (see README.md "Publish")
       - caddy_data:/data               # Let's Encrypt certs + account key — MUST persist
       - caddy_config:/config
     depends_on:
@@ -47,7 +47,7 @@ services:
       OVERPASS_UPDATE_SLEEP: "3600"   # pull diffs hourly
     volumes:
       # Named volume lives under the docker data-root (default /var/lib/docker/volumes) — see
-      # ROCKY.md "Disk" for the free-space requirement and how to relocate it to a data disk.
+      # README.md "Disk" for the free-space requirement and how to relocate it to a data disk.
       - overpass_db:/db
     expose:
       - "80"   # internal only — Caddy is the public entrypoint

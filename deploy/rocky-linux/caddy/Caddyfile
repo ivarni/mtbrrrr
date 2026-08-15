@@ -19,7 +19,7 @@
 	header Cache-Control "no-cache"
 
 	# Basic auth is the privacy gate (this is a private map). {$SITE_PASSWORD_HASH} is a
-	# bcrypt hash from `caddy hash-password` — see .env.example / ROCKY.md.
+	# bcrypt hash from `caddy hash-password` — see .env.example / README.md.
 	basic_auth {
 		{$SITE_USER} {$SITE_PASSWORD_HASH}
 	}
