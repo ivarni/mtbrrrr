@@ -1,0 +1,60 @@
+# Read as-is by Caddy. {$VARS} are substituted from the container environment, which comes
+# from docker-compose.yml -> env_file: .env. This is a DIRECTORY mount (./caddy), so editing
+# this file and running `docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile`
+# picks up the change. Verify what Caddy actually loaded with:
+#   docker compose exec caddy caddy adapt --config /etc/caddy/Caddyfile
+{
+	# Where Let's Encrypt sends expiry/issue notices.
+	email {$ACME_EMAIL}
+}
+
+# ---- static PWA -----------------------------------------------------------------------
+{$SITE_DOMAIN} {
+	root * /srv/site
+	encode gzip
+
+	# Nothing here is content-hashed. A long max-age on sw.js would leave browsers running an
+	# old service worker that then serves a stale app shell — the app can pin itself to an old
+	# version indefinitely. no-cache means "revalidate every time" (a 304 with ETags).
+	header Cache-Control "no-cache"
+
+	# Basic auth is the privacy gate (this is a private map). {$SITE_PASSWORD_HASH} is a
+	# bcrypt hash from `caddy hash-password` — see .env.example / ROCKY.md.
+	basic_auth {
+		{$SITE_USER} {$SITE_PASSWORD_HASH}
+	}
+
+	file_server
+}
+
+# ---- self-hosted Overpass (Norway), CORS locked to the site origin --------------------
+{$OVERPASS_DOMAIN} {
+	@site_origin header_regexp Origin ^({$SITE_ORIGIN_REGEX})$
+	@other_origin not header_regexp Origin ^({$SITE_ORIGIN_REGEX})$
+
+	# Two non-obvious things here:
+	#
+	# 1. `defer` is load-bearing. The Overpass image's own nginx sets
+	#    Access-Control-Allow-Origin: * — but only when the request carries an Origin header,
+	#    so it is invisible to plain curl and always present for a browser. A header op without
+	#    `defer` runs BEFORE reverse_proxy copies upstream headers, so ours does not replace
+	#    theirs, it STACKS: two ACAO headers and every browser rejects the response. `defer`
+	#    moves the op to just before the response is written, so it replaces.
+	#
+	# 2. The upstream's permissive * has to be removed for everyone else, or restricting the
+	#    origin achieves nothing. Requests with no Origin (curl, monitoring) land there too,
+	#    which is correct — they need no CORS header.
+	header @site_origin {
+		defer
+		Access-Control-Allow-Origin "{http.request.header.Origin}"
+		Vary Origin
+	}
+
+	header @other_origin {
+		defer
+		-Access-Control-Allow-Origin
+		Vary Origin
+	}
+
+	reverse_proxy overpass:80
+}
