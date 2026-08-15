@@ -24,14 +24,20 @@ browser ──443──▶ caddy ──┬─ file_server  /srv/site      (mtb.<
 
 ---
 
-## 0. Prerequisites on the box
+## Prerequisites on the box
+
+Assumed already in place (this guide won't walk you through them):
 
 - Rocky Linux 9, root or sudo.
-- A **public IP**. If the box is behind NAT, forward TCP **80 and 443** to it. (If your ISP
-  blocks inbound 80, Caddy still gets certs via TLS-ALPN on 443 — but 80 is also what
-  redirects http→https, so forward it if you can.)
+- **Docker CE + the compose v2 plugin** installed, docker service enabled (`docker compose version` → v2.x), and **git**.
+- A **public IP** with TCP **80 and 443** reachable — opened in firewalld (`http`/`https`
+  services) and forwarded through any NAT. (If your ISP blocks inbound 80, Caddy still gets
+  certs via TLS-ALPN on 443 — but 80 also redirects http→https, so forward it if you can.)
 - DNS you control for your domain (the app expects the convention site `mtb.<domain>`,
   Overpass `overpass.<domain>` — same base domain, at least three labels).
+
+Project-specific sizing you do need to get right:
+
 - **Disk**: the Norway DB is ~10–20 GB, and the first import needs the 1.3 GB PBF plus
   osmium scratch on top. Have **≥ 30 GB free** on the docker data-root (default
   `/var/lib/docker`). Check before importing:
@@ -43,30 +49,12 @@ browser ──443──▶ caddy ──┬─ file_server  /srv/site      (mtb.<
   `systemctl restart docker`) **before** the first `up`, or replace the `overpass_db` named
   volume in `docker-compose.yml` with a bind mount to the disk (add `:Z` for SELinux).
 
-## 1. Install Docker CE + compose plugin
+**SELinux** can stay **enforcing** — the compose file labels its bind mounts (`:Z`) and the DB
+is a named volume, so no manual relabeling is needed. (If a mount ever 403s after you edit
+files on the host, `sudo restorecon -Rv deploy/rocky-linux/site deploy/rocky-linux/caddy`
+fixes the labels.)
 
-Docker is **not** in the Rocky base repos.
-
-```sh
-sudo dnf -y install dnf-plugins-core
-sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-sudo dnf -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin
-sudo systemctl enable --now docker
-docker compose version   # sanity check: v2.x
-```
-
-## 2. Open the firewall
-
-```sh
-sudo firewall-cmd --permanent --add-service=http --add-service=https
-sudo firewall-cmd --reload
-```
-
-SELinux can stay **enforcing** — the compose file labels its bind mounts (`:Z`) and the DB is
-a named volume, so no manual relabeling is needed. (If a mount ever 403s after you edit files
-on the host, `sudo restorecon -Rv deploy/rocky/site deploy/rocky/caddy` fixes the labels.)
-
-## 3. DNS
+## 1. DNS
 
 Point both hostnames at the box's public IP and wait for them to resolve **before** the first
 `up` (Caddy asks Let's Encrypt for a cert the moment it starts; a name that doesn't resolve
@@ -82,12 +70,11 @@ dig +short mtb.<your-domain>
 dig +short overpass.<your-domain>   # both must return the server IP
 ```
 
-## 4. Get the code and configure
+## 2. Get the code and configure
 
 ```sh
-sudo dnf -y install git   # if needed
 git clone <this-repo> /opt/mtbrrrr
-cd /opt/mtbrrrr/deploy/rocky
+cd /opt/mtbrrrr/deploy/rocky-linux
 
 cp .env.example .env
 ```
@@ -106,11 +93,11 @@ Edit `.env`:
   ```sh
   echo 'your-password' | docker run --rm -i caddy:2 caddy hash-password | sed 's/\$/\$\$/g'
   ```
-  (A wrong/mangled hash surfaces as a 401 in step 8.)
+  (A wrong/mangled hash surfaces as a 401 in step 6.)
 - `SITE_ORIGIN_REGEX` — `https://` + `SITE_DOMAIN` with the dots escaped, e.g.
   `https://mtb\.example\.com`.
 
-## 5. Publish the site files
+## 3. Publish the site files
 
 Caddy's web root must contain **only** the four app files (pointing it at the repo root would
 serve `.git/`, `deploy/`, etc.). Copy them into the gitignored `site/` dir:
@@ -121,7 +108,7 @@ install -Dm644 -t site ../../index.html ../../app.js ../../sw.js ../../manifest.
 
 Re-run this one line whenever you change an app file (then `docker compose restart caddy`).
 
-## 6. Validate the config
+## 4. Validate the config
 
 ```sh
 docker compose config >/dev/null        # compose file parses + interpolates
@@ -132,7 +119,7 @@ docker run --rm --env-file .env -v "$PWD/caddy":/etc/caddy:ro caddy:2 \
 Both must succeed. (The `--env-file` and `--adapter caddyfile` flags are required, or validate
 false-fails on empty `{$VARS}` / the non-JSON format.)
 
-## 7. First start — this triggers the Overpass import
+## 5. First start — this triggers the Overpass import
 
 ```sh
 docker compose up -d
@@ -166,7 +153,7 @@ Two things that look alarming and are **not**:
 - **Hourly `ERROR: Error while downloading diffs` / `status code: 3`** is pyosmium saying
   "no new data" — harmless.
 
-## 8. Verify it's live
+## 6. Verify it's live
 
 ```sh
 set -a; source .env; set +a    # pull $SITE_DOMAIN / $OVERPASS_DOMAIN in, so these are generic
@@ -184,10 +171,10 @@ curl -s -H "Origin: https://$SITE_DOMAIN" -D- -o /dev/null \
 ```
 
 Then open `https://$SITE_DOMAIN` on a phone: it should prompt for basic auth once, load the
-map (MapTiler base — see step 9), show trails, and offer "Add to Home Screen". GPS and the
+map (MapTiler base — see step 7), show trails, and offer "Add to Home Screen". GPS and the
 service worker require HTTPS, which you now have.
 
-## 9. MapTiler referrer allow-list
+## 7. MapTiler referrer allow-list
 
 `app.js` ships a public MapTiler key restricted by HTTP referrer. Add the new origin or the
 base map 403s. In **MapTiler → Account → Keys → Allowed origins**, add the **bare host** (no
@@ -207,7 +194,7 @@ re-publish — the app falls back to OpenFreeMap Liberty + its own hillshade.)
 - **App files** (`index.html`/`app.js`/`sw.js`/`manifest.webmanifest`):
   ```sh
   git -C /opt/mtbrrrr pull
-  cd /opt/mtbrrrr/deploy/rocky
+  cd /opt/mtbrrrr/deploy/rocky-linux
   install -Dm644 -t site ../../index.html ../../app.js ../../sw.js ../../manifest.webmanifest
   docker compose restart caddy
   ```
@@ -241,7 +228,7 @@ After=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/opt/mtbrrrr/deploy/rocky
+WorkingDirectory=/opt/mtbrrrr/deploy/rocky-linux
 ExecStart=/usr/bin/docker compose up -d
 ExecStop=/usr/bin/docker compose down
 
@@ -254,12 +241,12 @@ WantedBy=multi-user.target
 | Symptom | Cause / fix |
 |---|---|
 | Cert never issues, Caddy logs ACME failures | DNS not resolving to the box yet, or 80/443 not reachable (firewall/NAT). Confirm `dig`, and that the ports are forwarded. |
-| 401 on everything, even with correct password | `SITE_PASSWORD_HASH` not `$$`-escaped in `.env` (or wrong password). Re-run the `printenv` check in step 7 — the container must show the single-`$` hash; fix the escaping and `docker compose up -d`. |
+| 401 on everything, even with correct password | `SITE_PASSWORD_HASH` not `$$`-escaped in `.env` (or wrong password). Re-run the `printenv` check in step 5 — the container must show the single-`$` hash; fix the escaping and `docker compose up -d`. |
 | Overpass "download loop", disk filling, no import | `OVERPASS_PLANET_PREPROCESS` was removed/edited — it must stay (see the comment in `docker-compose.yml`). |
 | Two `access-control-allow-origin` headers / browser CORS error | A `defer` was dropped from the Caddyfile header ops, or the `@other_origin` strip block was removed. |
-| Map loads but no base tiles (403 from `api.maptiler.com`) | MapTiler referrer allow-list — step 9. |
-| Overpass import out of disk | Step 0 disk sizing — relocate the docker data-root or bind-mount `overpass_db` to a bigger disk, then re-run `docker compose up -d` (it re-imports). |
-| Site serves the wrong/old file after `git pull` | You forgot to re-run the `install` in step 5 and `docker compose restart caddy`. |
+| Map loads but no base tiles (403 from `api.maptiler.com`) | MapTiler referrer allow-list — step 7. |
+| Overpass import out of disk | The disk sizing in Prerequisites — relocate the docker data-root or bind-mount `overpass_db` to a bigger disk, then re-run `docker compose up -d` (it re-imports). |
+| Site serves the wrong/old file after `git pull` | You forgot to re-run the `install` in step 3 and `docker compose restart caddy`. |
 
 ## Reference
 

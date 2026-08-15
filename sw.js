@@ -17,7 +17,7 @@ const SHELL = [
 ];
 
 // Self-hosted Overpass host (Norway) — DERIVED from our own origin so no domain is hardcoded:
-// site at mtb.<domain> => Overpass at overpass.<domain> (matches app.js and deploy/rocky/).
+// site at mtb.<domain> => Overpass at overpass.<domain> (matches app.js and deploy/rocky-linux/).
 // null on localhost / IP / apex, so dev just uses the public mirrors below.
 const SELF_HOSTED_OVERPASS_HOST = (() => {
   const h = self.location.hostname;

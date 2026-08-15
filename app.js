@@ -396,7 +396,7 @@ map.on('moveend', () => {
 });
 
 // Self-hosted Overpass (Norway), on a single Rocky Linux box — Caddy fronting the
-// wiktorn/overpass-api container; see deploy/rocky/. Domain-agnostic: no domain is hardcoded.
+// wiktorn/overpass-api container; see deploy/rocky-linux/. Domain-agnostic: no domain is hardcoded.
 // By the deploy convention the site is served at mtb.<domain> and Overpass at
 // overpass.<domain>, so we DERIVE the endpoint from our own origin (first DNS label swapped
 // to "overpass"). Empty on localhost, an IP literal, or a bare apex host — so local dev and
