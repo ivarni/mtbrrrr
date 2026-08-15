@@ -18,11 +18,12 @@
 	# version indefinitely. no-cache means "revalidate every time" (a 304 with ETags).
 	header Cache-Control "no-cache"
 
-	# Basic auth is the privacy gate (this is a private map). {$SITE_PASSWORD_HASH} is a
-	# bcrypt hash from `caddy hash-password` — see .env.example / README.md.
-	basic_auth {
-		{$SITE_USER} {$SITE_PASSWORD_HASH}
-	}
+	# The privacy gate is optional and defaults to ON. SITE_AUTH_SNIPPET (from .env) picks which
+	# file gets inlined here: auth-on.conf (basic_auth, the default when the var is unset) or
+	# auth-off.conf (empty — serves publicly). See .env.example / README.md for the toggle.
+	# NOTE: SITE_AUTH_SNIPPET is an ENV change — flip it in .env and run `docker compose up -d`.
+	# A `caddy reload` re-reads this file but NOT the container env, so it won't pick up a toggle.
+	import {$SITE_AUTH_SNIPPET:/etc/caddy/auth-on.conf}
 
 	file_server
 }

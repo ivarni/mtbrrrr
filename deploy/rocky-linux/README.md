@@ -2,7 +2,7 @@
 
 Runs **both** halves of mtbrrrr on one server you own:
 
-- the static PWA at `https://mtb.<your-domain>`, behind HTTP basic auth
+- the static PWA at `https://mtb.<your-domain>`, behind HTTP basic auth (optional, on by default)
 - the self-hosted Norway Overpass API at `https://overpass.<your-domain>`
 
 Nothing is hardcoded to a specific domain: you set yours in `.env`, and the static app derives
@@ -18,7 +18,7 @@ Overpass VM + Caddy, and all of Terraform (`../site/`, `../overpass/`) — those
 as reference/rollback.
 
 ```
-browser ──443──▶ caddy ──┬─ file_server  /srv/site      (mtb.<domain>, basic auth)
+browser ──443──▶ caddy ──┬─ file_server  /srv/site      (mtb.<domain>, basic auth: optional, on by default)
                          └─ reverse_proxy overpass:80    (overpass.<domain>, CORS)
 ```
 
@@ -85,7 +85,11 @@ Edit `.env`:
 - `SITE_DOMAIN` / `OVERPASS_DOMAIN` — set to `mtb.<your-domain>` / `overpass.<your-domain>`
   (same base domain; the app derives the Overpass host from the site origin — see the note in
   `.env.example`).
-- `SITE_USER` — pick a username.
+- `SITE_AUTH_SNIPPET` — the auth toggle. Leave it at `/etc/caddy/auth-on.conf` (the default,
+  which also applies if you delete the line) to require a login, or set it to
+  `/etc/caddy/auth-off.conf` to serve the map publicly. With auth off, skip `SITE_USER` /
+  `SITE_PASSWORD_HASH` below — they're unused.
+- `SITE_USER` — pick a username. (Auth-on only.)
 - `SITE_PASSWORD_HASH` — a bcrypt hash with every `$` **doubled to `$$`** (docker compose's
   `env_file` interpolates `$`; Caddy receives the de-escaped single-`$` value — verified on
   compose v2 / docker 29). Generate it already-escaped in one step and paste the output
@@ -93,7 +97,7 @@ Edit `.env`:
   ```sh
   echo 'your-password' | docker run --rm -i caddy:2 caddy hash-password | sed 's/\$/\$\$/g'
   ```
-  (A wrong/mangled hash surfaces as a 401 in step 6.)
+  (A wrong/mangled hash surfaces as a 401 in step 6.) Auth-on only.
 - `SITE_ORIGIN_REGEX` — `https://` + `SITE_DOMAIN` with the dots escaped, e.g.
   `https://mtb\.example\.com`.
 
@@ -119,6 +123,15 @@ docker run --rm --env-file .env -v "$PWD/caddy":/etc/caddy:ro caddy:2 \
 Both must succeed. (The `--env-file` and `--adapter caddyfile` flags are required, or validate
 false-fails on empty `{$VARS}` / the non-JSON format.)
 
+Also validate the auth-OFF state — it imports the empty snippet instead of `basic_auth`, and
+you want to know it adapts cleanly regardless of which mode you deploy:
+
+```sh
+docker run --rm --env-file .env -e SITE_AUTH_SNIPPET=/etc/caddy/auth-off.conf \
+  -v "$PWD/caddy":/etc/caddy:ro caddy:2 \
+  caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
+```
+
 ## 5. First start — this triggers the Overpass import
 
 ```sh
@@ -129,7 +142,8 @@ docker compose up -d
 - **Overpass** now downloads Norway (~1.3 GB), converts PBF→bz2 with osmium, and imports.
   Reference: **~45 min** on decent hardware; the import is the heaviest thing this box does.
 
-Verify the basic-auth hash reached the container intact (do this once):
+Verify the basic-auth hash reached the container intact (do this once — **auth-on only**; skip
+if you set `SITE_AUTH_SNIPPET=/etc/caddy/auth-off.conf`):
 
 ```sh
 docker compose exec caddy printenv SITE_PASSWORD_HASH   # must be the single-$ hash (de-escaped)
@@ -158,9 +172,13 @@ Two things that look alarming and are **not**:
 ```sh
 set -a; source .env; set +a    # pull $SITE_DOMAIN / $OVERPASS_DOMAIN in, so these are generic
 
-# Site: 401 without creds, 200 with.
-curl -sI "https://$SITE_DOMAIN/" | head -1                      # HTTP/2 401
+# Site, auth ON (default): 401 without creds, 200 with.
+# ALWAYS run the no-creds check when you intend auth to be on — it is the ONE guard against
+# accidentally serving the private map publicly (e.g. SITE_AUTH_SNIPPET left on the off path).
+# A 200 here when you expected 401 means auth is OFF: fix SITE_AUTH_SNIPPET and `up -d`.
+curl -sI "https://$SITE_DOMAIN/" | head -1                      # HTTP/2 401  (MUST be 401 if auth on)
 curl -sI -u 'USER:PASS' "https://$SITE_DOMAIN/" | head -1       # HTTP/2 200
+# (Deliberately auth OFF? Then this flips: expect 200 with no creds from the first curl above.)
 
 # sw.js must not be long-cached.
 curl -sI -u 'USER:PASS' "https://$SITE_DOMAIN/sw.js" | grep -i cache-control   # no-cache
@@ -170,7 +188,8 @@ curl -s -H "Origin: https://$SITE_DOMAIN" -D- -o /dev/null \
   "https://$OVERPASS_DOMAIN/api/interpreter?data=[out:json];way(59.90,10.65,59.95,10.70)[highway];out geom;"
 ```
 
-Then open `https://$SITE_DOMAIN` on a phone: it should prompt for basic auth once, load the
+Then open `https://$SITE_DOMAIN` on a phone: it should prompt for basic auth once (only when
+auth is on), load the
 map (MapTiler base — see step 7), show trails, and offer "Add to Home Screen". GPS and the
 service worker require HTTPS, which you now have.
 
@@ -210,6 +229,15 @@ re-publish — the app falls back to OpenFreeMap Liberty + its own hillshade.)
   docker compose exec caddy caddy adapt --config /etc/caddy/Caddyfile >/dev/null && echo ok
   ```
   (A `.env` change needs a full `docker compose up -d` to re-inject the container environment.)
+
+  To **toggle auth on/off**, flip `SITE_AUTH_SNIPPET` in `.env` (see .env.example) between
+  `/etc/caddy/auth-on.conf` and `/etc/caddy/auth-off.conf`, then `docker compose up -d` (it's an
+  env change, so a reload alone won't pick it up). Turning auth on for the first time also needs
+  `SITE_USER` / `SITE_PASSWORD_HASH` set.
+
+  **Upgrading an existing install:** no `.env` change is needed. A plain `git pull` brings the
+  new Caddyfile and both snippet files together; with `SITE_AUTH_SNIPPET` absent from your `.env`
+  the default keeps auth **on**, exactly as before.
 
 ## Reboot / persistence
 
