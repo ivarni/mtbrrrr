@@ -399,13 +399,21 @@ map.on('moveend', () => {
 // wiktorn/overpass-api container; see deploy/rocky-linux/. Domain-agnostic: no domain is hardcoded.
 // By the deploy convention the site is served at mtb.<domain> and Overpass at
 // overpass.<domain>, so we DERIVE the endpoint from our own origin (first DNS label swapped
-// to "overpass"). Empty on localhost, an IP literal, or a bare apex host — so local dev and
-// non-standard setups fall back to the public mirrors. Tried first for Norway cells; each
-// request carries OVERPASS_TIMEOUT so a dead host fails fast. sw.js derives the same host for
-// offline cache-first. To force public-only, hardcode this to ''.
+// to "overpass"). Empty on an IP literal or a bare apex host — those fall back to the public
+// mirrors. Tried first for Norway cells; each request carries OVERPASS_TIMEOUT so a dead host
+// fails fast. sw.js derives the same host for offline cache-first. To force public-only,
+// hardcode this to ''.
+//
+// localhost is the one hardcoded case: it points at the container ./run-locally.sh starts.
+// Safe whether or not one is running — with nothing listening the request fails immediately
+// and the loop in overpassQuery() falls through to the mirrors, which is the same fallback
+// this returned '' for before. Deliberately NOT mirrored in sw.js, so dev responses stay
+// uncached and you always see what the local box actually returns.
 const SELF_HOSTED_OVERPASS = (() => {
   const h = location.hostname;
-  if (h === 'localhost' || /^[0-9.]+$/.test(h)) return '';   // dev / IP: no self-hosted box
+  // Port matches OVERPASS_PORT in run-locally.sh — change both together.
+  if (h === 'localhost') return 'http://localhost:12345/api/interpreter';
+  if (/^[0-9.]+$/.test(h)) return '';   // IP: no self-hosted box
   const labels = h.split('.');
   if (labels.length < 3) return '';   // need a subdomain to replace (e.g. mtb.example.com)
   labels[0] = 'overpass';
