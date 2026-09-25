@@ -63,9 +63,63 @@ const geolocate = new maplibregl.GeolocateControl({
   positionOptions: { enableHighAccuracy: true },
   fitBoundsOptions: { maxZoom: 17 },
   trackUserLocation: true,
-  showUserHeading: true,
 });
 map.addControl(geolocate, 'top-left');
+
+// MapLibre 4.x has no heading indicator, so draw our own cone under the location dot. It
+// follows the compass (device orientation), so it also points the right way standing still.
+const headingMarker = new maplibregl.Marker({
+  element: Object.assign(document.createElement('div'), { className: 'heading-cone' }),
+  anchor: 'bottom', // the cone's tip sits on the location and is the rotation pivot
+  rotationAlignment: 'map',
+  pitchAlignment: 'map',
+});
+const orientationEvent = 'ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation';
+let lastPosition = null;
+let coneShown = false;
+let compassWanted = false;
+
+function onOrientation(e) {
+  // iOS gives degrees clockwise from north (negative = invalid); absolute alpha runs
+  // counter-clockwise. 360 - alpha is where the device's top edge points at any sideways
+  // tilt; the W3C spec's beta/gamma formula is the back-camera direction, undefined held flat.
+  const heading = e.webkitCompassHeading ?? (e.absolute && e.alpha != null ? 360 - e.alpha : null);
+  if (heading == null || heading < 0 || !lastPosition) return;
+  headingMarker.setRotation((heading + (screen.orientation?.angle ?? 0)) % 360);
+  if (!coneShown) { headingMarker.setLngLat(lastPosition).addTo(map); coneShown = true; }
+}
+
+function stopCompass() {
+  compassWanted = false;
+  lastPosition = null;
+  window.removeEventListener(orientationEvent, onOrientation);
+  headingMarker.remove();
+  coneShown = false;
+}
+
+geolocate.on('geolocate', (p) => {
+  lastPosition = [p.coords.longitude, p.coords.latitude];
+  headingMarker.setLngLat(lastPosition);
+});
+// Fires synchronously inside the Locate tap, so iOS accepts the permission request here.
+// requestPermission must be the first call: an await before it would lose the user gesture.
+geolocate.on('trackuserlocationstart', () => {
+  const ask = window.DeviceOrientationEvent?.requestPermission;
+  compassWanted = true;
+  (ask ? DeviceOrientationEvent.requestPermission() : Promise.resolve('granted'))
+    .then((state) => {
+      if (!compassWanted) return; // tracking stopped while the prompt was open
+      if (state !== 'granted') return status('Compass permission denied.');
+      window.addEventListener(orientationEvent, onOrientation);
+    })
+    .catch(() => {});
+});
+// trackuserlocationend also fires when a pan moves tracking to the background, where
+// MapLibre keeps the dot; only stop when tracking is really off.
+geolocate.on('trackuserlocationend', () => {
+  if (!document.querySelector('.maplibregl-ctrl-geolocate-background')) stopCompass();
+});
+geolocate.on('error', (e) => { if (e.code === 1) stopCompass(); });
 
 map.on('moveend', () => {
   if (fixtureMode) return;
@@ -229,9 +283,6 @@ map.on('load', async () => {
     },
   });
 
-  $('trails').setAttribute('aria-pressed', String(trailsOn));
-  if (vectorTrails) setTrailVisibility();
-
   status(vectorTrails
     ? 'Ready. Trails cover Norway only.'
     : 'Trail data needs a connection.', !vectorTrails);
@@ -240,25 +291,6 @@ map.on('load', async () => {
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
 // ---------- Locate ----------
 $('locate').addEventListener('click', () => geolocate.trigger());
-
-// ---------- PMTiles trails ----------
-let trailsOn = fixtureMode || localStorage.getItem('trailsOn') === '1';
-const trailLayerIds = ['trails-highlight', 'trails-fade', 'trails-path', 'trails-track-g1', 'trails-track-g2', 'trails-track-g3', 'trails-track-g4', 'trails-track-g5', 'trails-bridleway', 'trails-cycleway', 'trails-line-hard'];
-function setTrailVisibility() {
-  for (const id of trailLayerIds) map.setLayoutProperty(id, 'visibility', trailsOn ? 'visible' : 'none');
-}
-
-$('trails').addEventListener('click', (e) => {
-  trailsOn = !trailsOn;
-  e.currentTarget.setAttribute('aria-pressed', String(trailsOn));
-  if (!fixtureMode) localStorage.setItem('trailsOn', trailsOn ? '1' : '0');
-  if (vectorTrails) {
-    setTrailVisibility();
-    status(trailsOn ? 'Trails on. Norway only.' : 'Trails off.');
-  } else {
-    status('Trail data needs a connection.');
-  }
-});
 
 // ---------- GPX overlay ----------
 $('gpx').addEventListener('change', async (e) => {

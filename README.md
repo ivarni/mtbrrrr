@@ -5,8 +5,8 @@ A private, mobile-first MTB map for Norway. It is a static MapLibre app backed b
 ## What it does
 
 - Shows Norwegian OSM paths, tracks, bridleways, cycleways and footways, coloured by `mtb:scale`
-- Tracks your location and heading
-- Lets you show or hide trails and load a GPX route
+- Tracks your location and compass heading
+- Always shows trails and lets you load a GPX route
 - Caches the app shell and base-map tiles for revisits
 
 Trail data needs a connection. The app shell can open offline, but it does not promise offline trail coverage. Outside Norway, trail data is unavailable.
