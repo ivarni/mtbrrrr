@@ -3,7 +3,7 @@
 // keep-list, so install() refetches the shell instead of relying on stale-while-revalidate to
 // notice. Leave TILE_CACHE alone — renaming it would throw away the map tiles, DEM and trail
 // data that make cached areas work offline.
-const APP_CACHE = 'app-v5';
+const APP_CACHE = 'app-v10';
 const TILE_CACHE = 'tiles-v1';
 
 // Local app shell to precache on install.
@@ -13,13 +13,15 @@ const SHELL = [
   './app.js',
   './manifest.webmanifest',
   'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm',
+  'https://cdn.jsdelivr.net/npm/pmtiles@4.3.0/+esm',
   'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css',
 ];
 
-// Self-hosted Overpass host (Norway) — DERIVED from our own origin so no domain is hardcoded:
-// site at mtb.<domain> => Overpass at overpass.<domain> (matches app.js and deploy/rocky-linux/).
-// null on localhost / IP / apex, so dev just uses the public mirrors below.
+// Self-hosted Overpass host (Norway) — derived from our own origin: site at mtb.<domain>
+// maps to overpass.<domain>. Local development uses the deployed endpoint; other dev origins,
+// IPs, and apex hosts use the public mirrors below.
 const SELF_HOSTED_OVERPASS_HOST = (() => {
+  if (self.location.origin === 'http://localhost:8000') return 'overpass.joms.ninja';
   const h = self.location.hostname;
   if (h === 'localhost' || /^[0-9.]+$/.test(h)) return null;
   const labels = h.split('.');
@@ -64,6 +66,13 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+
+  // PMTiles is fetched with byte ranges. Cache Storage cannot safely cache partial responses.
+  if (url.pathname.endsWith('.pmtiles')) return;
+  if (url.pathname.endsWith('/data/latest.json')) {
+    event.respondWith(networkFirst(req, APP_CACHE));
+    return;
+  }
 
   if (TILE_HOSTS.includes(url.hostname)) {
     if (url.searchParams.has(REVALIDATE_PARAM)) {
@@ -120,6 +129,17 @@ async function revalidate(url, req, cacheName) {
     return (await cache.match(cleanReq)) || res;
   } catch (err) {
     return (await cache.match(cleanReq)) || Response.error();
+  }
+}
+
+async function networkFirst(req, cacheName) {
+  const cache = await caches.open(cacheName);
+  try {
+    const res = await fetch(req);
+    if (res.ok) await cache.put(req, res.clone());
+    return res;
+  } catch (err) {
+    return (await cache.match(req)) || Response.error();
   }
 }
 

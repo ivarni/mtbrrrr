@@ -1,5 +1,25 @@
 import maplibregl from 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm';
 
+// `?fixture=name` uses a local archive; production reads the current immutable archive from
+// data/latest.json. A missing manifest leaves the existing Overpass fallback usable.
+const requestedFixture = new URLSearchParams(location.search).get('fixture');
+const fixtureName = requestedFixture === '1' ? 'fixture' : requestedFixture;
+const fixtureMode = fixtureName !== null;
+const fixtureUrl = fixtureMode && new URL(`./deploy/rocky-linux/site/data/${fixtureName || 'fixture'}/trails.pmtiles`, location.href).href;
+let vectorTrails = false;
+const trailsReady = (fixtureUrl
+  ? Promise.resolve(fixtureUrl)
+  : fetch('./data/latest.json', { cache: 'no-store' })
+    .then((res) => res.ok ? res.json() : Promise.reject(new Error(`manifest ${res.status}`)))
+    .then(({ archive }) => new URL(`./data/${archive}`, location.href).href)
+).then(async (archiveUrl) => {
+  const { PMTiles, Protocol } = await import('https://cdn.jsdelivr.net/npm/pmtiles@4.3.0/+esm');
+  const protocol = new Protocol();
+  maplibregl.addProtocol('pmtiles', protocol.tile);
+  protocol.add(new PMTiles(archiveUrl));
+  vectorTrails = archiveUrl;
+}).catch(() => {});
+
 // ---------- tiny helpers ----------
 const $ = (id) => document.getElementById(id);
 let statusTimer;
@@ -12,8 +32,9 @@ function status(msg, sticky = false) {
 }
 
 // ---------- persisted view ----------
-const saved = JSON.parse(localStorage.getItem('view') || 'null') ||
-  { center: [10.75, 59.91], zoom: 12 }; // Oslo-ish default
+const saved = fixtureMode
+  ? { center: [10.8658, 60.0345], zoom: 16 }
+  : JSON.parse(localStorage.getItem('view') || 'null') || { center: [10.75, 59.91], zoom: 12 }; // Oslo-ish default
 
 // ---------- base map ----------
 // MapTiler Outdoor gives topo cartography (contours + hillshade + terrain) close to
@@ -46,6 +67,7 @@ const geolocate = new maplibregl.GeolocateControl({
 map.addControl(geolocate, 'top-left');
 
 map.on('moveend', () => {
+  if (fixtureMode) return;
   localStorage.setItem('view', JSON.stringify({
     center: map.getCenter().toArray(),
     zoom: map.getZoom(),
@@ -53,7 +75,8 @@ map.on('moveend', () => {
 });
 
 // ---------- layers added once style is ready ----------
-map.on('load', () => {
+map.on('load', async () => {
+  await trailsReady;
   // MapTiler Outdoor already ships hillshade + contours, so only add our own keyless
   // Terrarium DEM hillshade on the Liberty fallback (which has none).
   if (!USING_MAPTILER) {
@@ -103,8 +126,11 @@ map.on('load', () => {
     }, 'Water');
   }
 
-  // Empty sources we fill on demand.
-  map.addSource('trails', { type: 'geojson', data: emptyFC() });
+  // Fixture mode uses the same layers against the generated vector archive; normal mode keeps
+  // the existing Overpass-backed GeoJSON source until the production migration.
+  map.addSource('trails', vectorTrails
+    ? { type: 'vector', url: `pmtiles://${vectorTrails}`, maxzoom: 16 }
+    : { type: 'geojson', data: emptyFC() });
 
   // class:bicycle:mtb casings, drawn UNDER the trail line (added first) and wider so they
   // peek out. Positive value (good for MTB) → bright yellow highlight; negative value
@@ -114,6 +140,7 @@ map.on('load', () => {
     id: 'trails-highlight',
     type: 'line',
     source: 'trails',
+    ...(vectorTrails && { 'source-layer': 'trails' }),
     filter: ['>', ['to-number', ['get', 'mtbclass'], 0], 0],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
@@ -127,6 +154,7 @@ map.on('load', () => {
     id: 'trails-fade',
     type: 'line',
     source: 'trails',
+    ...(vectorTrails && { 'source-layer': 'trails' }),
     filter: ['<', ['to-number', ['get', 'mtbclass'], 0], 0],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
@@ -159,7 +187,7 @@ map.on('load', () => {
     const paint = { 'line-color': TRAIL_COLOR, 'line-width': TRAIL_WIDTH, 'line-opacity': TRAIL_OPACITY };
     if (dash) paint['line-dasharray'] = dash;
     map.addLayer({
-      id, type: 'line', source: 'trails', filter,
+      id, type: 'line', source: 'trails', ...(vectorTrails && { 'source-layer': 'trails' }), filter,
       layout: { 'line-cap': cap, 'line-join': 'round' },
       paint,
     });
@@ -184,6 +212,7 @@ map.on('load', () => {
     id: 'trails-line-hard',
     type: 'line',
     source: 'trails',
+    ...(vectorTrails && { 'source-layer': 'trails' }),
     filter: ['in', ['get', 'grade'], ['literal', ['4', '5', '6']]],
     layout: { 'line-cap': 'butt', 'line-join': 'round' },
     paint: {
@@ -202,12 +231,17 @@ map.on('load', () => {
 
   // Restore trail mode across reloads — cells come back from the SW cache offline.
   $('trails').setAttribute('aria-pressed', String(trailsOn));
-  if (trailsOn) loadTrailCells();
+  if (vectorTrails) setFixtureTrailVisibility();
+  else if (trailsOn) loadTrailCells();
 
   status('Ready. 📍 to find yourself, 🚵 for trails.');
 });
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
+const fixtureTrailLayers = ['trails-highlight', 'trails-fade', 'trails-path', 'trails-track-g1', 'trails-track-g2', 'trails-track-g3', 'trails-track-g4', 'trails-track-g5', 'trails-bridleway', 'trails-cycleway', 'trails-line-hard'];
+function setFixtureTrailVisibility() {
+  for (const id of fixtureTrailLayers) map.setLayoutProperty(id, 'visibility', trailsOn ? 'visible' : 'none');
+}
 
 // ---------- Locate ----------
 $('locate').addEventListener('click', () => geolocate.trigger());
@@ -221,7 +255,7 @@ $('locate').addEventListener('click', () => geolocate.trigger());
 const CELL = 0.05;             // grid cell size in degrees (~5.5 km of latitude)
 const TRAILS_MINZOOM = 11;     // below this a viewport spans too many cells
 const MAX_CELLS_PER_LOAD = 16; // guard against huge multi-cell fetches
-let trailsOn = localStorage.getItem('trailsOn') === '1';
+let trailsOn = fixtureMode || localStorage.getItem('trailsOn') === '1';
 const loadedCells = new Set();   // "ix_iy" keys already fetched this session
 const trailFeatures = new Map(); // OSM way id -> feature (dedupe across cells)
 const cellFeatures = new Map();  // "ix_iy" -> Set<way id> that cell last returned
@@ -375,8 +409,11 @@ $('trails').addEventListener('click', (e) => {
   const btn = e.currentTarget;
   trailsOn = !trailsOn;
   btn.setAttribute('aria-pressed', String(trailsOn));
-  localStorage.setItem('trailsOn', trailsOn ? '1' : '0');
-  if (trailsOn) {
+  if (!fixtureMode) localStorage.setItem('trailsOn', trailsOn ? '1' : '0');
+  if (vectorTrails) {
+    setFixtureTrailVisibility();
+    status(trailsOn ? 'Fixture trails on.' : 'Trails off.');
+  } else if (trailsOn) {
     loadTrailCells();
   } else {
     loadedCells.clear();
@@ -390,7 +427,7 @@ $('trails').addEventListener('click', (e) => {
 // Auto-load cells as the map moves (debounced) while trail mode is on.
 let trailMoveTimer;
 map.on('moveend', () => {
-  if (!trailsOn) return;
+  if (vectorTrails || !trailsOn) return;
   clearTimeout(trailMoveTimer);
   trailMoveTimer = setTimeout(loadTrailCells, 400);
 });
@@ -402,10 +439,12 @@ map.on('moveend', () => {
 // to "overpass"). Empty on localhost, an IP literal, or a bare apex host — so local dev and
 // non-standard setups fall back to the public mirrors. Tried first for Norway cells; each
 // request carries OVERPASS_TIMEOUT so a dead host fails fast. sw.js derives the same host for
-// offline cache-first. To force public-only, hardcode this to ''.
+// offline cache-first. Local development uses the deployed endpoint; other dev ports/IPs use
+// public mirrors. To force public-only, hardcode this to ''.
 const SELF_HOSTED_OVERPASS = (() => {
+  if (location.origin === 'http://localhost:8000') return 'https://overpass.joms.ninja/api/interpreter';
   const h = location.hostname;
-  if (h === 'localhost' || /^[0-9.]+$/.test(h)) return '';   // dev / IP: no self-hosted box
+  if (h === 'localhost' || /^[0-9.]+$/.test(h)) return '';   // other dev origins / IP: public mirrors
   const labels = h.split('.');
   if (labels.length < 3) return '';   // need a subdomain to replace (e.g. mtb.example.com)
   labels[0] = 'overpass';
