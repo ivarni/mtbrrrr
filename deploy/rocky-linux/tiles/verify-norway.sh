@@ -27,7 +27,7 @@ from mapbox_vector_tile import decode
 required = ("osm_id", "name", "mtbname", "grade", "mtbclass", "highway", "tracktype")
 overview = decode(gzip.decompress(open("/data/6.mvt", "rb").read()))["trails"]["features"]
 assert overview and all(f["properties"].keys() == {"grade", "mtbclass"} for f in overview)
-print(f"z6 overview: {len(overview)} features, {os.path.getsize('/data/6.mvt')} bytes")
+print(f"z6 overview: {len(overview)} features, {os.path.getsize("/data/6.mvt")} bytes")
 samples = []
 for z in (11, 13, 16):
  features = decode(gzip.decompress(open(f"/data/{z}.mvt", "rb").read()))["trails"]["features"]
