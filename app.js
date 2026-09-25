@@ -67,7 +67,7 @@ const geolocate = new maplibregl.GeolocateControl({
 map.addControl(geolocate, 'top-left');
 
 // MapLibre 4.x has no heading indicator, so draw our own cone under the location dot. It
-// follows the compass (device orientation), so it also points the right way standing still.
+// follows the compass (device orientation) standing still and the GPS course while moving.
 const headingMarker = new maplibregl.Marker({
   element: Object.assign(document.createElement('div'), { className: 'heading-cone' }),
   anchor: 'bottom', // the cone's tip sits on the location and is the rotation pivot
@@ -78,6 +78,23 @@ const orientationEvent = 'ondeviceorientationabsolute' in window ? 'deviceorient
 let lastPosition = null;
 let coneShown = false;
 let compassWanted = false;
+let gpsHeading = null;
+let compassHeading = null; // latest true-north compass reading, kept while moving
+
+// Phone compasses read magnetic north; the map uses true north. ponytail: bilinear fit to
+// WMM-2025 over mainland Norway (max error 0.34°, drifts ~0.2°/year): refit from WMM-2030.
+const declination = ([lon, lat]) => 3.3596 - 0.7328 * lon - 0.0426 * lat + 0.0187 * lon * lat;
+
+function showHeading(degrees) {
+  if (!lastPosition) return;
+  headingMarker.setRotation(degrees);
+  if (!coneShown) { headingMarker.setLngLat(lastPosition).addTo(map); coneShown = true; }
+}
+
+function hideHeading() {
+  headingMarker.remove();
+  coneShown = false;
+}
 
 function onOrientation(e) {
   // iOS gives degrees clockwise from north (negative = invalid); absolute alpha runs
@@ -85,21 +102,30 @@ function onOrientation(e) {
   // tilt; the W3C spec's beta/gamma formula is the back-camera direction, undefined held flat.
   const heading = e.webkitCompassHeading ?? (e.absolute && e.alpha != null ? 360 - e.alpha : null);
   if (heading == null || heading < 0 || !lastPosition) return;
-  headingMarker.setRotation((heading + (screen.orientation?.angle ?? 0)) % 360);
-  if (!coneShown) { headingMarker.setLngLat(lastPosition).addTo(map); coneShown = true; }
+  compassHeading = (heading + declination(lastPosition) + (screen.orientation?.angle ?? 0) + 360) % 360;
+  if (gpsHeading == null) showHeading(compassHeading); // moving: the GPS course wins
 }
 
 function stopCompass() {
   compassWanted = false;
   lastPosition = null;
+  gpsHeading = null;
+  compassHeading = null;
   window.removeEventListener(orientationEvent, onOrientation);
-  headingMarker.remove();
-  coneShown = false;
+  hideHeading();
 }
 
 geolocate.on('geolocate', (p) => {
-  lastPosition = [p.coords.longitude, p.coords.latitude];
+  const { longitude, latitude, heading, speed } = p.coords;
+  lastPosition = [longitude, latitude];
   headingMarker.setLngLat(lastPosition);
+  // Above ~2 m/s (7 km/h) the GPS course is true-north and steadier than the compass.
+  const wasMoving = gpsHeading != null;
+  gpsHeading = speed > 2 && Number.isFinite(heading) ? heading : null;
+  if (!compassWanted) return;
+  if (gpsHeading != null) showHeading(gpsHeading);
+  // Slowed down: don't leave a stale course; fall back to the compass, or hide without one.
+  else if (wasMoving) compassHeading != null ? showHeading(compassHeading) : hideHeading();
 });
 // Fires synchronously inside the Locate tap, so iOS accepts the permission request here.
 // requestPermission must be the first call: an await before it would lose the user gesture.
