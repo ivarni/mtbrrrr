@@ -290,7 +290,7 @@ cp "site/data/<release>/latest.json" "site/data/.latest.json.$$"
 mv "site/data/.latest.json.$$" site/data/latest.json
 ```
 
-Verify the published z8, z11, z13, and z16 samples
+Verify the published z6 overview and z11, z13, and z16 samples
 against the PBF without rebuilding:
 
 ```sh

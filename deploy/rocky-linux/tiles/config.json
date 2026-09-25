@@ -1,9 +1,9 @@
 {
   "layers": {
-    "trails": { "minzoom": 8, "maxzoom": 16, "simplify_below": 11, "simplify_level": 0.0005, "simplify_ratio": 2 }
+    "trails": { "minzoom": 6, "maxzoom": 16, "combine_below": 11, "simplify_below": 11, "simplify_level": 0.0005, "simplify_ratio": 2 }
   },
   "settings": {
-    "minzoom": 8,
+    "minzoom": 6,
     "maxzoom": 16,
     "basezoom": 16,
     "include_ids": true,

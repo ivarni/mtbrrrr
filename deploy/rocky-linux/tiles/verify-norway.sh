@@ -12,7 +12,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 python3 - <<'PY' > "$tmp/tiles"
 import math
-for z in (8, 11, 13, 16):
+for z in (6, 11, 13, 16):
  lon, lat = 10.75, 59.91
  print(z, int((lon + 180) / 360 * 2**z), int((1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2 * 2**z))
 PY
@@ -25,8 +25,11 @@ docker run --rm -v "$tmp:/data" python:3.13-slim sh -ceu '
 import gzip, json, os
 from mapbox_vector_tile import decode
 required = ("osm_id", "name", "mtbname", "grade", "mtbclass", "highway", "tracktype")
+overview = decode(gzip.decompress(open("/data/6.mvt", "rb").read()))["trails"]["features"]
+assert overview and all(f["properties"].keys() == {"grade", "mtbclass"} for f in overview)
+print(f"z6 overview: {len(overview)} features, {os.path.getsize('/data/6.mvt')} bytes")
 samples = []
-for z in (8, 11, 13, 16):
+for z in (11, 13, 16):
  features = decode(gzip.decompress(open(f"/data/{z}.mvt", "rb").read()))["trails"]["features"]
  feature = next(f for f in features if set(required) <= f["properties"].keys())
  samples.append({"z": z, "properties": feature["properties"], "tile_bytes": os.path.getsize(f"/data/{z}.mvt")})

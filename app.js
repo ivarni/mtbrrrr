@@ -256,7 +256,7 @@ map.on('load', async () => {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': TRAIL_COLOR,
-      'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1, 11, 2],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.75, 8, 1, 11, 2],
       'line-opacity': TRAIL_OPACITY,
     },
   });

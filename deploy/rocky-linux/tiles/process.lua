@@ -9,13 +9,15 @@ function way_function()
   local grade = Find("mtb:scale")
   local mtbclass = Find("class:bicycle:mtb")
   Layer("trails", false)
-  Attribute("osm_id", "osm:way/" .. Id())
-  Attribute("name", name)
-  Attribute("mtbname", mtbname)
+  -- The z6-10 overview only draws grade and mtbclass. Dropping the rest there lets
+  -- combine_below merge touching ways into few features, keeping overview tiles small.
   Attribute("grade", grade)
   Attribute("mtbclass", mtbclass)
-  Attribute("highway", highway)
-  Attribute("tracktype", Find("tracktype"))
-  -- Graded and named ways form the z8-10 overview; the rest join at z13.
-  MinZoom((name ~= "" or mtbname ~= "" or grade ~= "" or mtbclass ~= "") and 8 or 13)
+  Attribute("osm_id", "osm:way/" .. Id(), 11)
+  Attribute("name", name, 11)
+  Attribute("mtbname", mtbname, 11)
+  Attribute("highway", highway, 11)
+  Attribute("tracktype", Find("tracktype"), 11)
+  -- Graded and named ways form the z6-10 overview; the rest join at z13.
+  MinZoom((name ~= "" or mtbname ~= "" or grade ~= "" or mtbclass ~= "") and 6 or 13)
 end

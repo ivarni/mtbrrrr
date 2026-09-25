@@ -21,7 +21,7 @@
   map.on('load', () => {
     map.addSource('trails', { type: 'vector', url: `pmtiles://${url}`, maxzoom: 16 });
     const color = ['match', ['get', 'grade'], '0', '#22c55e', '1', '#3b82f6', '2', '#ef4444', '3', '#111111', '4', '#facc15', '5', '#facc15', '6', '#facc15', '#9ca3af'];
-    const width = ['interpolate', ['linear'], ['zoom'], 8, 1, 11, 2, 16, 5];
+    const width = ['interpolate', ['linear'], ['zoom'], 6, 0.75, 8, 1, 11, 2, 16, 5];
     for (const [id, filter, dash, cap = 'butt'] of [
       ['path', ['in', ['get', 'highway'], ['literal', ['path', 'footway']]], [0, 2], 'round'],
       ['track', ['==', ['get', 'highway'], 'track'], null, 'round'],
