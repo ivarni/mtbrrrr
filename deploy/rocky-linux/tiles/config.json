@@ -1,0 +1,15 @@
+{
+  "layers": {
+    "trails": { "minzoom": 11, "maxzoom": 16 }
+  },
+  "settings": {
+    "minzoom": 11,
+    "maxzoom": 16,
+    "basezoom": 16,
+    "include_ids": true,
+    "name": "mtbrrrr fixture trails",
+    "version": "1",
+    "description": "Fixture-only MTB trail tiles",
+    "compress": "gzip"
+  }
+}

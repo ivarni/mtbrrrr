@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>html,body,#map{margin:0;height:100%}</style>
+<div id="map"></div>
+<script type="module">
+  import maplibregl from 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm';
+  import { Protocol, PMTiles } from 'https://cdn.jsdelivr.net/npm/pmtiles@4.3.0/+esm';
+
+  const protocol = new Protocol();
+  maplibregl.addProtocol('pmtiles', protocol.tile);
+  const url = new URL('../site/data/fixture/trails.pmtiles', import.meta.url).href;
+  protocol.add(new PMTiles(url));
+  const map = new maplibregl.Map({
+    container: 'map', style: 'https://tiles.openfreemap.org/styles/liberty',
+    center: [10.8658, 60.0312], zoom: 13,
+  });
+  window.fixtureMap = map;
+  map.addControl(new maplibregl.NavigationControl());
+  map.on('load', () => {
+    map.addSource('trails', { type: 'vector', url: `pmtiles://${url}`, maxzoom: 16 });
+    const color = ['match', ['get', 'grade'], '0', '#22c55e', '1', '#3b82f6', '2', '#ef4444', '3', '#111111', '4', '#facc15', '5', '#facc15', '6', '#facc15', '#9ca3af'];
+    const width = ['interpolate', ['linear'], ['zoom'], 11, 2, 16, 5];
+    for (const [id, filter, dash, cap = 'butt'] of [
+      ['path', ['in', ['get', 'highway'], ['literal', ['path', 'footway']]], [0, 2], 'round'],
+      ['track', ['==', ['get', 'highway'], 'track'], null, 'round'],
+      ['bridleway', ['==', ['get', 'highway'], 'bridleway'], [4, 2]],
+      ['cycleway', ['==', ['get', 'highway'], 'cycleway'], null, 'round'],
+    ]) {
+      const paint = { 'line-color': color, 'line-width': width };
+      if (dash) paint['line-dasharray'] = dash;
+      map.addLayer({ id, type: 'line', source: 'trails', 'source-layer': 'trails', filter, layout: { 'line-cap': cap, 'line-join': 'round' }, paint });
+    }
+  });
+</script>

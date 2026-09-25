@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="mtbrrrr-fixture">
+  <node id="1" lat="60.0300" lon="10.8600"/><node id="2" lat="60.0310" lon="10.8640"/>
+  <node id="3" lat="60.0320" lon="10.8600"/><node id="4" lat="60.0330" lon="10.8640"/>
+  <node id="5" lat="60.0340" lon="10.8600"/><node id="6" lat="60.0350" lon="10.8640"/>
+  <node id="7" lat="60.0360" lon="10.8600"/><node id="8" lat="60.0370" lon="10.8640"/>
+  <node id="9" lat="60.0380" lon="10.8600"/><node id="10" lat="60.0390" lon="10.8640"/>
+  <node id="11" lat="60.0312" lon="10.8000"/><node id="12" lat="60.0312" lon="10.9500"/>
+  <node id="13" lat="60.0410" lon="10.8600"/><node id="14" lat="60.0420" lon="10.8640"/>
+  <way id="101"><nd ref="1"/><nd ref="2"/><tag k="highway" v="path"/><tag k="name" v="Named path"/><tag k="mtb:scale" v="1"/></way>
+  <way id="102"><nd ref="3"/><nd ref="4"/><tag k="highway" v="track"/><tag k="tracktype" v="grade3"/></way>
+  <way id="103"><nd ref="5"/><nd ref="6"/><tag k="highway" v="bridleway"/></way>
+  <way id="104"><nd ref="7"/><nd ref="8"/><tag k="highway" v="cycleway"/><tag k="class:bicycle:mtb" v="2"/></way>
+  <way id="105"><nd ref="9"/><nd ref="10"/><tag k="highway" v="footway"/></way>
+  <way id="106"><nd ref="11"/><nd ref="12"/><tag k="highway" v="path"/><tag k="name" v="Boundary path"/></way>
+  <way id="107"><nd ref="13"/><nd ref="14"/><tag k="highway" v="residential"/></way>
+</osm>

@@ -239,6 +239,47 @@ re-publish — the app falls back to OpenFreeMap Liberty + its own hillshade.)
   new Caddyfile and both snippet files together; with `SITE_AUTH_SNIPPET` absent from your `.env`
   the default keeps auth **on**, exactly as before.
 
+## PMTiles fixture preview
+
+The fixture proves the direct OSM → PMTiles path before a Norway-wide build. It is not a data
+release. Build either the deterministic tiny fixture or the checked-in Nittedal sample:
+
+```sh
+./tiles/build-fixture.sh fixture
+./tiles/build-fixture.sh nittedal
+```
+
+The archive is written to `site/data/<name>/trails.pmtiles`; the command validates its PMTiles
+structure. To inspect it locally with correct byte-range handling:
+
+```sh
+docker run --rm -p 127.0.0.1:8001:80 -v "$PWD/../..:/srv:ro" caddy:2.11.4 \
+  caddy file-server --root /srv --listen :80
+```
+
+Open `http://localhost:8001/index.html?fixture=fixture` or `?fixture=nittedal`. A range check
+must return `206 Partial Content`:
+
+```sh
+curl -s -D - -o /dev/null -H 'Range: bytes=0-99' http://localhost:8001/deploy/rocky-linux/site/data/fixture/trails.pmtiles
+```
+
+## Norway PMTiles build
+
+After the fixture passes, run the country build on the Rocky host, not a laptop. Supply the
+Geofabrik extract timestamp so the manifest records the actual source snapshot:
+
+```sh
+./tiles/build-norway.sh \
+  https://download.geofabrik.de/europe/norway-latest.osm.pbf \
+  2026-09-24 \
+  2026-09-24T00:00:00Z
+```
+
+It builds directly to `site/data/<release>/trails.pmtiles`, saves GNU `time -v` output as
+`build-time.txt`, validates the archive, then atomically replaces `site/data/latest.json`.
+Keep the previous release directory for rollback.
+
 ## Reboot / persistence
 
 `restart: unless-stopped` plus the enabled docker service brings the whole stack back after a
