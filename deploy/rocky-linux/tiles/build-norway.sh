@@ -11,8 +11,9 @@ staging="$site/.staging-$release"
 mkdir -p "$staging" "$tiles/.store"
 trap 'rm -rf "$staging"' EXIT
 
-curl --fail --location --remote-name --output-dir "$tiles" "$source_url"
 pbf="$tiles/${source_url##*/}"
+[ -f "$pbf" ] || curl --fail --location --remote-name --output-dir "$tiles" "$source_url"
+[ -x /usr/bin/time ] || { echo "install GNU time: sudo dnf install -y time" >&2; exit 1; }
 if [ -z "$source_timestamp" ]; then
   source_timestamp=$(docker run --rm -v "$tiles:/data:ro" debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 \
     sh -ceu "apt-get update -qq && apt-get install -y -qq osmium-tool >/dev/null && osmium fileinfo -g header.option.osmosis_replication_timestamp /data/${pbf##*/}")
