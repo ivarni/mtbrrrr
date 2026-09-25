@@ -43,7 +43,7 @@ fi
     if [ -r /proc/pressure/io ]; then
       io_pressure=$(awk '/^some / { split($2, a, "="); some = a[2] } /^full / { split($2, a, "="); full = a[2] } END { print some "\t" full }' /proc/pressure/io)
     else
-      io_pressure='unavailable\tunavailable'
+      io_pressure=$(printf 'unavailable\tunavailable')
     fi
     printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$stats" "$scratch" "$io_pressure"
     sleep 2
