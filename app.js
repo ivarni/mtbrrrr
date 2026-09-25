@@ -32,9 +32,18 @@ function status(msg, sticky = false) {
 }
 
 // ---------- persisted view ----------
+// A URL hash (#zoom/lat/lng) overrides all of this: MapLibre applies it in the constructor.
+// With no saved view we show all of mainland Norway, then fly to the user if GPS is allowed.
+// MapLibre throws on an out-of-range hash (e.g. a mangled shared link), so drop those first.
+const hashParts = location.hash.slice(1).split('/').map(Number);
+if (location.hash && !(hashParts.length >= 3 && hashParts.every(Number.isFinite) && Math.abs(hashParts[1]) <= 90)) {
+  history.replaceState(history.state, '', location.pathname + location.search);
+}
 const saved = fixtureMode
   ? { center: [10.8658, 60.0345], zoom: 16 }
-  : JSON.parse(localStorage.getItem('view') || 'null') || { center: [10.75, 59.91], zoom: 12 }; // Oslo-ish default
+  : JSON.parse(localStorage.getItem('view') || 'null');
+const NORWAY = [[4.5, 57.9], [31.2, 71.2]];
+const firstVisit = !saved && !location.hash; // read now: the map writes a hash as soon as it exists
 
 // ---------- base map ----------
 // MapTiler Outdoor gives topo cartography (contours + hillshade + terrain) close to
@@ -50,9 +59,8 @@ const STYLE_URL = USING_MAPTILER
 const map = new maplibregl.Map({
   container: 'map',
   style: STYLE_URL,
-  center: saved.center,
-  zoom: saved.zoom,
-  hash: false,
+  ...(saved ? { center: saved.center, zoom: saved.zoom } : { bounds: NORWAY }),
+  hash: true,
   maxPitch: 75,
   attributionControl: { compact: true },
 });
@@ -146,6 +154,15 @@ geolocate.on('trackuserlocationend', () => {
   if (!document.querySelector('.maplibregl-ctrl-geolocate-background')) stopCompass();
 });
 geolocate.on('error', (e) => { if (e.code === 1) stopCompass(); });
+
+// First visit (no hash, no saved view): locate the user only if they already granted GPS,
+// so opening the app never triggers a permission prompt by itself.
+if (firstVisit) {
+  map.once('load', async () => {
+    const perm = await navigator.permissions?.query({ name: 'geolocation' }).catch(() => null);
+    if (perm?.state === 'granted') geolocate.trigger();
+  });
+}
 
 map.on('moveend', () => {
   if (fixtureMode) return;
