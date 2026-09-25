@@ -278,7 +278,12 @@ pressure support it records pressure averages; otherwise it records host disk me
 `host-iostat.txt` and requires `sysstat`. `build-time.txt` records the build start and finish.
 Review those files while the host is under normal load before scheduling builds. The script validates the archive, then atomically replaces
 `site/data/latest.json`. Release names are immutable: the script refuses an existing name. Keep
-the previous release directory for rollback.
+the previous release directory for rollback. Verify the published z11, z13, and z16 samples
+against the PBF without rebuilding:
+
+```sh
+./tiles/verify-norway.sh <release>
+```
 
 ## Reboot / persistence
 
