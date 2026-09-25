@@ -266,14 +266,11 @@ curl -s -D - -o /dev/null -H 'Range: bytes=0-99' http://localhost:8001/deploy/ro
 
 ## Norway PMTiles build
 
-After the fixture passes, run the country build on the Rocky host, not a laptop. Supply the
-Geofabrik extract timestamp so the manifest records the actual source snapshot:
+After the fixture passes, run the country build on the Rocky host, not a laptop. The script
+reads the Geofabrik PBF replication timestamp itself and records it in the manifest:
 
 ```sh
-./tiles/build-norway.sh \
-  https://download.geofabrik.de/europe/norway-latest.osm.pbf \
-  2026-09-24 \
-  2026-09-24T00:00:00Z
+./tiles/build-norway.sh https://download.geofabrik.de/europe/norway-latest.osm.pbf 2026-09-24
 ```
 
 It builds directly to `site/data/<release>/trails.pmtiles`, saves GNU `time -v` output as

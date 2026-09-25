@@ -6,13 +6,18 @@ tiles="$root/deploy/rocky-linux/tiles"
 site="$root/deploy/rocky-linux/site/data"
 source_url=${1:-https://download.geofabrik.de/europe/norway-latest.osm.pbf}
 release=${2:-$(date -u +%F)}
-source_timestamp=${3:?usage: build-norway.sh [source-url] [release] <source-timestamp>}
+source_timestamp=${3:-}
 staging="$site/.staging-$release"
 mkdir -p "$staging" "$tiles/.store"
 trap 'rm -rf "$staging"' EXIT
 
 curl --fail --location --remote-name --output-dir "$tiles" "$source_url"
 pbf="$tiles/${source_url##*/}"
+if [ -z "$source_timestamp" ]; then
+  source_timestamp=$(docker run --rm -v "$tiles:/data:ro" debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 \
+    sh -ceu "apt-get update -qq && apt-get install -y -qq osmium-tool >/dev/null && osmium fileinfo -g header.option.osmosis_replication_timestamp /data/${pbf##*/}")
+fi
+[ -n "$source_timestamp" ] || { echo "PBF has no replication timestamp" >&2; exit 1; }
 started=$(date -u +%FT%TZ)
 /usr/bin/time -v -o "$staging/time.txt" docker run --rm \
   -v "$tiles:/data" -v "$staging:/out" \
