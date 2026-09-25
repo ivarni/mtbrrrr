@@ -1,7 +1,7 @@
 import maplibregl from 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm';
 
 // `?fixture=name` uses a local archive; production reads the current immutable archive from
-// data/latest.json. A missing manifest leaves the existing Overpass fallback usable.
+// data/latest.json. A missing manifest leaves the app shell usable without trail data.
 const requestedFixture = new URLSearchParams(location.search).get('fixture');
 const fixtureName = requestedFixture === '1' ? 'fixture' : requestedFixture;
 const fixtureMode = fixtureName !== null;
@@ -126,8 +126,7 @@ map.on('load', async () => {
     }, 'Water');
   }
 
-  // Fixture mode uses the same layers against the generated vector archive; normal mode keeps
-  // the existing Overpass-backed GeoJSON source until the production migration.
+  // PMTiles supplies the production trails; the empty source keeps the shell usable offline.
   map.addSource('trails', vectorTrails
     ? { type: 'vector', url: `pmtiles://${vectorTrails}`, maxzoom: 16 }
     : { type: 'geojson', data: emptyFC() });
@@ -231,314 +230,34 @@ map.on('load', async () => {
 
   // Restore trail mode across reloads — cells come back from the SW cache offline.
   $('trails').setAttribute('aria-pressed', String(trailsOn));
-  if (vectorTrails) setFixtureTrailVisibility();
-  else if (trailsOn) loadTrailCells();
+  if (vectorTrails) setTrailVisibility();
+  else status('Trail data needs a connection.');
 
-  status('Ready. 📍 to find yourself, 🚵 for trails.');
+  status(vectorTrails ? 'Ready. 📍 to find yourself, 🚵 for trails.' : 'Trail data needs a connection.', !vectorTrails);
 });
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
-const fixtureTrailLayers = ['trails-highlight', 'trails-fade', 'trails-path', 'trails-track-g1', 'trails-track-g2', 'trails-track-g3', 'trails-track-g4', 'trails-track-g5', 'trails-bridleway', 'trails-cycleway', 'trails-line-hard'];
-function setFixtureTrailVisibility() {
-  for (const id of fixtureTrailLayers) map.setLayoutProperty(id, 'visibility', trailsOn ? 'visible' : 'none');
-}
-
 // ---------- Locate ----------
 $('locate').addEventListener('click', () => geolocate.trigger());
 
-// ---------- MTB trails via Overpass, on a fixed grid so URLs repeat & cache ----------
-// The old handler queried the exact viewport once: every pan made a new bbox URL
-// (never a cache hit) and never re-ran. Instead we snap queries to a fixed lat/lon
-// grid — the same cell yields a byte-identical Overpass URL every visit, so the
-// service worker's cache-first strategy hits (instant/offline revisits) — and we
-// auto-load cells as the map moves.
-const CELL = 0.05;             // grid cell size in degrees (~5.5 km of latitude)
-const TRAILS_MINZOOM = 11;     // below this a viewport spans too many cells
-const MAX_CELLS_PER_LOAD = 16; // guard against huge multi-cell fetches
+// ---------- PMTiles trails ----------
 let trailsOn = fixtureMode || localStorage.getItem('trailsOn') === '1';
-const loadedCells = new Set();   // "ix_iy" keys already fetched this session
-const trailFeatures = new Map(); // OSM way id -> feature (dedupe across cells)
-const cellFeatures = new Map();  // "ix_iy" -> Set<way id> that cell last returned
-
-const cellKey = (ix, iy) => `${ix}_${iy}`;
-
-// How long a cell's data is trusted before a background refresh. Geofabrik cuts the Norway
-// extract once a day, and the server polls hourly, so anything under ~24h would refetch data
-// that cannot have changed. See deploy/overpass/INFRA.md.
-const CELL_TTL_MS = 24 * 60 * 60 * 1000;
-const CELL_TS_KEY = 'cellFetchedAt';
-const CELL_TS_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // drop entries for cells long unvisited
-
-let cellFetchedAt = {};
-try {
-  const raw = JSON.parse(localStorage.getItem(CELL_TS_KEY) || '{}');
-  const cutoff = Date.now() - CELL_TS_MAX_AGE_MS;
-  for (const [k, t] of Object.entries(raw)) if (typeof t === 'number' && t > cutoff) cellFetchedAt[k] = t;
-} catch (e) {
-  cellFetchedAt = {}; // corrupt entry: treat every cell as stale rather than throwing
-}
-
-let cellTsTimer;
-function touchCell(key) {
-  cellFetchedAt[key] = Date.now();
-  // Debounced: a multi-cell load would otherwise serialise JSON once per cell.
-  clearTimeout(cellTsTimer);
-  cellTsTimer = setTimeout(() => {
-    try { localStorage.setItem(CELL_TS_KEY, JSON.stringify(cellFetchedAt)); } catch (e) { /* quota — freshness just falls back to per-session */ }
-  }, 500);
-}
-
-// Replace what one cell contributes, so a way deleted or retagged in OSM actually disappears.
-// Ways legitimately span cell boundaries, so an id is only dropped once NO cell still claims
-// it — deleting on absence from this one cell alone would erase trails that are still present
-// in the neighbour.
-function applyCellData(key, features) {
-  const previous = cellFeatures.get(key);
-  const current = new Set();
-  for (const f of features) {
-    trailFeatures.set(f.id, f);
-    current.add(f.id);
-  }
-  cellFeatures.set(key, current);
-  if (!previous) return;
-  for (const id of previous) {
-    if (current.has(id)) continue;
-    let claimedElsewhere = false;
-    for (const owned of cellFeatures.values()) {
-      if (owned.has(id)) { claimedElsewhere = true; break; }
-    }
-    if (!claimedElsewhere) trailFeatures.delete(id);
-  }
-}
-
-// All grid cells whose bbox intersects the current view.
-function cellsInView() {
-  const b = map.getBounds();
-  const ix0 = Math.floor(b.getWest() / CELL), ix1 = Math.floor(b.getEast() / CELL);
-  const iy0 = Math.floor(b.getSouth() / CELL), iy1 = Math.floor(b.getNorth() / CELL);
-  const cells = [];
-  for (let ix = ix0; ix <= ix1; ix++)
-    for (let iy = iy0; iy <= iy1; iy++) cells.push([ix, iy]);
-  return cells;
-}
-
-// Overpass query for one grid cell — bbox snapped to the grid at fixed precision,
-// so the resulting URL string is identical on every revisit.
-function cellQuery(ix, iy) {
-  const s = (iy * CELL).toFixed(4), w = (ix * CELL).toFixed(4);
-  const n = ((iy + 1) * CELL).toFixed(4), e = ((ix + 1) * CELL).toFixed(4);
-  return `[out:json][timeout:25];
-    (way["highway"~"^(path|track|bridleway|cycleway|footway)$"](${s},${w},${n},${e}););
-    out geom;`;
-}
-
-function renderTrails() {
-  const src = map.getSource('trails');
-  if (src) src.setData({ type: 'FeatureCollection', features: [...trailFeatures.values()] });
-}
-
-// Load every not-yet-loaded cell intersecting the view. Safe to call repeatedly.
-let loadToken = 0;
-async function loadTrailCells() {
-  if (!trailsOn) return;
-  if (map.getZoom() < TRAILS_MINZOOM) { status('Zoom in a bit to load trails.'); return; }
-  const pending = cellsInView().filter(([ix, iy]) => !loadedCells.has(cellKey(ix, iy)));
-  if (!pending.length) return;
-  if (pending.length > MAX_CELLS_PER_LOAD) { status('Zoom in a bit to load trails.'); return; }
-
-  const token = ++loadToken;
-  status('Loading trails…', true);
-  let failed = 0;
-  for (const [ix, iy] of pending) {
-    const key = cellKey(ix, iy);
-    loadedCells.add(key); // mark before awaiting so overlapping moveends don't double-fetch
-    try {
-      const data = await overpassQuery(cellQuery(ix, iy), endpointsFor(ix, iy));
-      applyCellData(key, overpassToGeoJSON(data).features);
-      touchCell(key);
-    } catch (err) {
-      loadedCells.delete(key); // let a later pan retry this cell
-      failed++;
-    }
-  }
-  if (token !== loadToken) return; // a newer load superseded this batch
-  renderTrails();
-  status(failed
-    ? `Trails loaded (${failed} cell(s) failed — pan to retry).`
-    : `${trailFeatures.size} trail segments loaded.`);
-  revalidateStaleCells(token);
-}
-
-// The service worker serves trail data cache-first and never expires it, which is what makes
-// revisits instant and offline-capable — but it also means an edit in OSM would never reach a
-// device that had already loaded that cell. So after painting from cache, quietly refetch any
-// cell whose data is older than CELL_TTL_MS and redraw if it actually changed.
-//
-// Deliberately silent: it does not touch the status line, because a background refresh should
-// never make the UI flicker or look like it's loading.
-async function revalidateStaleCells(token) {
-  if (!trailsOn || token !== loadToken) return;
-  if (map.getZoom() < TRAILS_MINZOOM) return;
-  const now = Date.now();
-  const stale = cellsInView().filter(([ix, iy]) => {
-    const key = cellKey(ix, iy);
-    return loadedCells.has(key) && now - (cellFetchedAt[key] || 0) > CELL_TTL_MS;
-  });
-  if (!stale.length) return;
-
-  let refreshed = false;
-  for (const [ix, iy] of stale) {
-    if (token !== loadToken) return; // a pan superseded us; drop the rest of the batch
-    const key = cellKey(ix, iy);
-    try {
-      const data = await overpassQuery(cellQuery(ix, iy), endpointsFor(ix, iy), { revalidate: true });
-      applyCellData(key, overpassToGeoJSON(data).features);
-      touchCell(key);
-      // No attempt to diff the response: a way's geometry or tags can change without the
-      // feature count moving, so any successful refresh triggers one redraw at the end.
-      // setData with identical data is visually a no-op, so this costs nothing when unchanged.
-      refreshed = true;
-    } catch (err) {
-      // Keep showing the cached view and leave the timestamp alone so we retry next pan.
-    }
-  }
-  if (refreshed && token === loadToken) renderTrails();
+const trailLayerIds = ['trails-highlight', 'trails-fade', 'trails-path', 'trails-track-g1', 'trails-track-g2', 'trails-track-g3', 'trails-track-g4', 'trails-track-g5', 'trails-bridleway', 'trails-cycleway', 'trails-line-hard'];
+function setTrailVisibility() {
+  for (const id of trailLayerIds) map.setLayoutProperty(id, 'visibility', trailsOn ? 'visible' : 'none');
 }
 
 $('trails').addEventListener('click', (e) => {
-  const btn = e.currentTarget;
   trailsOn = !trailsOn;
-  btn.setAttribute('aria-pressed', String(trailsOn));
+  e.currentTarget.setAttribute('aria-pressed', String(trailsOn));
   if (!fixtureMode) localStorage.setItem('trailsOn', trailsOn ? '1' : '0');
   if (vectorTrails) {
-    setFixtureTrailVisibility();
-    status(trailsOn ? 'Fixture trails on.' : 'Trails off.');
-  } else if (trailsOn) {
-    loadTrailCells();
+    setTrailVisibility();
+    status(trailsOn ? 'Trails on.' : 'Trails off.');
   } else {
-    loadedCells.clear();
-    trailFeatures.clear();
-    cellFeatures.clear();
-    renderTrails();
-    status('Trails off.');
+    status('Trail data needs a connection.');
   }
 });
-
-// Auto-load cells as the map moves (debounced) while trail mode is on.
-let trailMoveTimer;
-map.on('moveend', () => {
-  if (vectorTrails || !trailsOn) return;
-  clearTimeout(trailMoveTimer);
-  trailMoveTimer = setTimeout(loadTrailCells, 400);
-});
-
-// Self-hosted Overpass (Norway), on a single Rocky Linux box — Caddy fronting the
-// wiktorn/overpass-api container; see deploy/rocky-linux/. Domain-agnostic: no domain is hardcoded.
-// By the deploy convention the site is served at mtb.<domain> and Overpass at
-// overpass.<domain>, so we DERIVE the endpoint from our own origin (first DNS label swapped
-// to "overpass"). Empty on localhost, an IP literal, or a bare apex host — so local dev and
-// non-standard setups fall back to the public mirrors. Tried first for Norway cells; each
-// request carries OVERPASS_TIMEOUT so a dead host fails fast. sw.js derives the same host for
-// offline cache-first. Local development uses the deployed endpoint; other dev ports/IPs use
-// public mirrors. To force public-only, hardcode this to ''.
-const SELF_HOSTED_OVERPASS = (() => {
-  if (location.origin === 'http://localhost:8000') return 'https://overpass.joms.ninja/api/interpreter';
-  const h = location.hostname;
-  if (h === 'localhost' || /^[0-9.]+$/.test(h)) return '';   // other dev origins / IP: public mirrors
-  const labels = h.split('.');
-  if (labels.length < 3) return '';   // need a subdomain to replace (e.g. mtb.example.com)
-  labels[0] = 'overpass';
-  return `https://${labels.join('.')}/api/interpreter`;
-})();
-
-// Public Overpass servers are community-run and often busy — try mirrors in turn.
-const PUBLIC_OVERPASS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-];
-
-// Rough mainland-Norway bbox (excludes Svalbard). Cells inside it go to the self-hosted
-// instance first; cells abroad use the public mirrors so travelling still shows trails.
-const NORWAY = { w: 4.0, s: 57.8, e: 31.5, n: 71.3 };
-function cellInNorway(ix, iy) {
-  const w = ix * CELL, s = iy * CELL, e = (ix + 1) * CELL, n = (iy + 1) * CELL;
-  return e > NORWAY.w && w < NORWAY.e && n > NORWAY.s && s < NORWAY.n;
-}
-function endpointsFor(ix, iy) {
-  return SELF_HOSTED_OVERPASS && cellInNorway(ix, iy)
-    ? [SELF_HOSTED_OVERPASS, ...PUBLIC_OVERPASS]
-    : PUBLIC_OVERPASS;
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// Overpass rate-limits by IP. Space requests out, and when we DO get a 429/504
-// honor Retry-After so we back off instead of hammering every mirror in turn.
-let overpassReadyAt = 0;               // don't send another request before this time
-const OVERPASS_MIN_GAP = 800;          // ms between requests (gentle on the servers)
-// Per-request timeout for the SELF-HOSTED endpoint ONLY: a dead/slow box must fail fast so we
-// fall through to the public mirrors instead of stalling on the browser's long default. Public
-// mirrors are left untimed on purpose — a valid large-bbox query there can legitimately take
-// longer, and aborting it would exhaust the fallback chain. Feature-detected: on a browser
-// without AbortSignal.timeout we just skip it (plain fetch) rather than throwing every request.
-const OVERPASS_TIMEOUT = 8000;         // ms
-const HAS_ABORT_TIMEOUT = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function';
-function overpassFetch(url, ep) {
-  return ep === SELF_HOSTED_OVERPASS && HAS_ABORT_TIMEOUT
-    ? fetch(url, { signal: AbortSignal.timeout(OVERPASS_TIMEOUT) })
-    : fetch(url);
-}
-async function overpassQuery(query, endpoints = PUBLIC_OVERPASS, { revalidate = false } = {}) {
-  // GET (not POST) so the service worker can cache the response by URL —
-  // that's what makes a previously-loaded area's trails work offline.
-  //
-  // `revalidate` appends a marker the service worker acts on and then strips, so the request
-  // goes to the network and overwrites the existing cache entry instead of reading it. The
-  // marker never reaches Overpass. See revalidate() in sw.js.
-  const qs = '?data=' + encodeURIComponent(query) + (revalidate ? '&_rv=1' : '');
-  let lastErr;
-  for (const ep of endpoints) {
-    const wait = overpassReadyAt - Date.now();
-    if (wait > 0) await sleep(wait);
-    try {
-      const res = await overpassFetch(ep + qs, ep);
-      if (res.status === 429 || res.status === 504) {
-        // Rate-limited / overloaded — back off before the next request anywhere.
-        const ra = parseInt(res.headers.get('Retry-After') || '', 10);
-        const backoff = Math.min((Number.isNaN(ra) ? 5 : ra) * 1000, 15000);
-        overpassReadyAt = Date.now() + backoff;
-        lastErr = new Error(res.status + ' from ' + new URL(ep).hostname);
-        continue;
-      }
-      if (!res.ok) { lastErr = new Error(res.status + ' from ' + new URL(ep).hostname); continue; }
-      overpassReadyAt = Date.now() + OVERPASS_MIN_GAP;
-      return await res.json();
-    } catch (e) { lastErr = e; }
-  }
-  throw lastErr || new Error('all mirrors unavailable');
-}
-
-function overpassToGeoJSON(data) {
-  const features = [];
-  for (const el of data.elements || []) {
-    if (el.type !== 'way' || !el.geometry) continue;
-    features.push({
-      type: 'Feature',
-      id: el.id, // OSM way id — used to dedupe ways that span multiple grid cells
-      properties: {
-        grade: (el.tags && el.tags['mtb:scale']) ?? '',
-        mtbclass: (el.tags && el.tags['class:bicycle:mtb']) ?? '',
-        tracktype: (el.tags && el.tags.tracktype) ?? '',
-        name: (el.tags && el.tags.name) || '',
-        highway: (el.tags && el.tags.highway) || '',
-      },
-      geometry: {
-        type: 'LineString',
-        coordinates: el.geometry.map((p) => [p.lon, p.lat]),
-      },
-    });
-  }
-  return { type: 'FeatureCollection', features };
-}
 
 // ---------- GPX overlay ----------
 $('gpx').addEventListener('change', async (e) => {
