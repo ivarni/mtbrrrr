@@ -236,66 +236,59 @@ map.on('load', async () => {
     ? { type: 'vector', url: `pmtiles://${vectorTrails}`, maxzoom: 16 }
     : { type: 'geojson', data: emptyFC() });
 
-  // class:bicycle:mtb casings, drawn UNDER the trail line (added first) and wider so they
-  // peek out. Positive value (good for MTB) → bright yellow highlight; negative value
-  // (poor for MTB) → a faint translucent tan. mtbclass is a string; to-number("") → 0 so
-  // untagged/zero paths get neither.
-  map.addLayer({
-    id: 'trails-highlight',
-    type: 'line',
-    source: 'trails',
-    ...(vectorTrails && { 'source-layer': 'trails' }),
-    filter: ['>', ['to-number', ['get', 'mtbclass'], 0], 0],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': '#facc15',
-      'line-width': ['interpolate', ['linear'], ['zoom'], 11, 6, 16, 11],
-      'line-opacity': 0.9,
-      'line-blur': 0.5,
-    },
-  });
-  map.addLayer({
-    id: 'trails-fade',
-    type: 'line',
-    source: 'trails',
-    ...(vectorTrails && { 'source-layer': 'trails' }),
-    filter: ['<', ['to-number', ['get', 'mtbclass'], 0], 0],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': '#b08968',
-      'line-width': ['interpolate', ['linear'], ['zoom'], 11, 6, 16, 11],
-      'line-opacity': 0.45,
-      'line-blur': 1,
-    },
-  });
-
-  // The trail line, colored by mtb:scale. line-dasharray can't be data-driven, so the
-  // way TYPE (path vs track-by-grade vs bridleway vs cycleway) is split across one layer
-  // per dash pattern — like mtbmap.no's "Ways" legend — all sharing these expressions.
+  const trailSource = { source: 'trails', ...(vectorTrails && { 'source-layer': 'trails' }) };
   const TRAIL_COLOR = [
     'match', ['get', 'grade'],
     '0', '#22c55e',   // green
     '1', '#3b82f6',   // blue
     '2', '#ef4444',   // red
-    '3', '#111111',   // black
+    '3', '#4b5563',   // dark grey, so the black way pattern stays visible
     '4', '#facc15', '5', '#facc15', '6', '#facc15', // yellow base under black dashes
     /* fallback: untagged */ '#9ca3af',
   ];
-  const TRAIL_WIDTH = ['interpolate', ['linear'], ['zoom'], 11, 2, 16, 5];
-  // Fade lines poor for MTB (class:bicycle:mtb < 0) so they recede into the tan casing.
+  // Fade lines poor for MTB (class:bicycle:mtb < 0) so they recede.
   const TRAIL_OPACITY = ['case', ['<', ['to-number', ['get', 'mtbclass'], 0], 0], 0.4, 1];
 
-  // dash is a dasharray in line-width units, or null for a solid line. Dots use a round
-  // cap over a zero-length dash; dashes use a butt cap so they stay crisp.
-  const addTrailLine = (id, filter, dash, cap = 'butt') => {
-    const paint = { 'line-color': TRAIL_COLOR, 'line-width': TRAIL_WIDTH, 'line-opacity': TRAIL_OPACITY };
-    if (dash) paint['line-dasharray'] = dash;
-    map.addLayer({
-      id, type: 'line', source: 'trails', ...(vectorTrails && { 'source-layer': 'trails' }), filter,
-      layout: { 'line-cap': cap, 'line-join': 'round' },
-      paint,
-    });
-  };
+  // Below z11 the archive only holds graded and named trails: draw them as thin solid
+  // difficulty lines, like mtbmap.no's overview. The detailed styling takes over at z11.
+  map.addLayer({
+    id: 'trails-overview', type: 'line', ...trailSource, maxzoom: 11,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': TRAIL_COLOR,
+      'line-width': ['interpolate', ['linear'], ['zoom'], 8, 1, 11, 2],
+      'line-opacity': TRAIL_OPACITY,
+    },
+  });
+
+  // From z11, mtbmap.no's look: a solid difficulty-coloured line with the way type drawn
+  // as a black pattern on top, and a thin class:bicycle:mtb halo underneath.
+  const BASE_WIDTH = ['interpolate', ['linear'], ['zoom'], 11, 3, 16, 8];
+  const HALO_WIDTH = ['interpolate', ['linear'], ['zoom'], 11, 7, 16, 15];
+  const PATTERN_WIDTH = ['interpolate', ['linear'], ['zoom'], 11, 1, 16, 2.5];
+  const addDetailLine = (id, filter, paint, cap = 'round') => map.addLayer({
+    id, type: 'line', ...trailSource, minzoom: 11, filter,
+    layout: { 'line-cap': cap, 'line-join': 'round' },
+    paint,
+  });
+
+  // Yellow class:bicycle:mtb halo for ways good for MTB. mtbclass is a string; to-number("")
+  // → 0 so untagged/zero paths get none. Poor ones (< 0) just fade via TRAIL_OPACITY.
+  addDetailLine('trails-highlight', ['>', ['to-number', ['get', 'mtbclass'], 0], 0],
+    { 'line-color': '#facc15', 'line-width': HALO_WIDTH, 'line-opacity': 0.95 });
+  addDetailLine('trails-grade', ['!=', ['get', 'grade'], ''],
+    { 'line-color': TRAIL_COLOR, 'line-width': BASE_WIDTH, 'line-opacity': TRAIL_OPACITY });
+  // Black dashes over the yellow base → black-with-yellow-stripes for grade 4+.
+  addDetailLine('trails-line-hard', ['in', ['get', 'grade'], ['literal', ['4', '5', '6']]],
+    { 'line-color': '#111111', 'line-width': BASE_WIDTH, 'line-opacity': TRAIL_OPACITY, 'line-dasharray': [2, 2] }, 'butt');
+
+  // The way TYPE as a black pattern, like mtbmap.no's "Ways" legend. line-dasharray can't
+  // be data-driven, so each pattern is its own layer. dash is in line-width units, or null
+  // for solid; dots use a round cap over a zero-length dash, dashes a crisp butt cap.
+  const addTrailLine = (id, filter, dash, cap = 'butt') => addDetailLine(id, filter, {
+    'line-color': '#111111', 'line-width': PATTERN_WIDTH, 'line-opacity': TRAIL_OPACITY,
+    ...(dash && { 'line-dasharray': dash }),
+  }, cap);
 
   const isTrack = ['==', ['get', 'highway'], 'track'];
   const trackGrade = (g) => ['all', isTrack, ['==', ['get', 'tracktype'], g]];
@@ -311,19 +304,20 @@ map.on('load', async () => {
   addTrailLine('trails-bridleway', ['==', ['get', 'highway'], 'bridleway'], [4, 2]);
   addTrailLine('trails-cycleway', ['==', ['get', 'highway'], 'cycleway'], null, 'round');
 
-  // Black dashes over the yellow base → black-with-yellow-stripes for grade 4+.
+  // Trail names along the line, like mtbmap.no: mtb:name first (riders' names such as
+  // "Bjørnars flyvende sidespor"), else name. Fonts come from the MapTiler style's glyphs.
+  // Archives built before mtbname existed lack it; coalesce keeps their name labels.
+  const mtbName = ['coalesce', ['get', 'mtbname'], ''];
   map.addLayer({
-    id: 'trails-line-hard',
-    type: 'line',
-    source: 'trails',
-    ...(vectorTrails && { 'source-layer': 'trails' }),
-    filter: ['in', ['get', 'grade'], ['literal', ['4', '5', '6']]],
-    layout: { 'line-cap': 'butt', 'line-join': 'round' },
-    paint: {
-      'line-width': ['interpolate', ['linear'], ['zoom'], 11, 2, 16, 5],
-      'line-color': '#111111',
-      'line-dasharray': [2, 2],
+    id: 'trails-label', type: 'symbol', ...trailSource, minzoom: 12,
+    filter: ['any', ['!=', mtbName, ''], ['!=', ['coalesce', ['get', 'name'], ''], '']],
+    layout: {
+      'symbol-placement': 'line',
+      'text-field': ['case', ['!=', mtbName, ''], mtbName, ['get', 'name']],
+      'text-font': ['Roboto Condensed Regular', 'Noto Sans Regular'],
+      'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10, 14, 12],
     },
+    paint: { 'text-color': '#1f2937', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
   });
 
   status(vectorTrails
