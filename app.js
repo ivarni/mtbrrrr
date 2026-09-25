@@ -7,12 +7,12 @@ const fixtureName = requestedFixture === '1' ? 'fixture' : requestedFixture;
 const fixtureMode = fixtureName !== null;
 const fixtureUrl = fixtureMode && new URL(`./deploy/rocky-linux/site/data/${fixtureName || 'fixture'}/trails.pmtiles`, location.href).href;
 let vectorTrails = false;
-const trailsReady = (fixtureUrl
-  ? Promise.resolve(fixtureUrl)
-  : fetch('./data/latest.json', { cache: 'no-store' })
+const manifest = navigator.onLine
+  ? fetch('./data/latest.json', { cache: 'no-store' })
     .then((res) => res.ok ? res.json() : Promise.reject(new Error(`manifest ${res.status}`)))
     .then(({ archive }) => new URL(`./data/${archive}`, location.href).href)
-).then(async (archiveUrl) => {
+  : Promise.reject(new Error('offline'));
+const trailsReady = (fixtureUrl ? Promise.resolve(fixtureUrl) : manifest).then(async (archiveUrl) => {
   const { PMTiles, Protocol } = await import('https://cdn.jsdelivr.net/npm/pmtiles@4.3.0/+esm');
   const protocol = new Protocol();
   maplibregl.addProtocol('pmtiles', protocol.tile);
@@ -61,6 +61,7 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-
 
 const geolocate = new maplibregl.GeolocateControl({
   positionOptions: { enableHighAccuracy: true },
+  fitBoundsOptions: { maxZoom: 17 },
   trackUserLocation: true,
   showUserHeading: true,
 });
@@ -76,6 +77,13 @@ map.on('moveend', () => {
 
 // ---------- layers added once style is ready ----------
 map.on('load', async () => {
+  map.addSource('gpx', { type: 'geojson', data: emptyFC() });
+  map.addLayer({
+    id: 'gpx-line', type: 'line', source: 'gpx',
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#a855f7', 'line-width': 5, 'line-opacity': 0.9 },
+  });
+
   await trailsReady;
   // MapTiler Outdoor already ships hillshade + contours, so only add our own keyless
   // Terrarium DEM hillshade on the Liberty fallback (which has none).
@@ -221,19 +229,12 @@ map.on('load', async () => {
     },
   });
 
-  map.addSource('gpx', { type: 'geojson', data: emptyFC() });
-  map.addLayer({
-    id: 'gpx-line', type: 'line', source: 'gpx',
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': '#a855f7', 'line-width': 5, 'line-opacity': 0.9 },
-  });
-
-  // Restore trail mode across reloads — cells come back from the SW cache offline.
   $('trails').setAttribute('aria-pressed', String(trailsOn));
   if (vectorTrails) setTrailVisibility();
-  else status('Trail data needs a connection.');
 
-  status(vectorTrails ? 'Ready. 📍 to find yourself, 🚵 for trails.' : 'Trail data needs a connection.', !vectorTrails);
+  status(vectorTrails
+    ? 'Ready. Trails cover Norway only.'
+    : 'Trail data needs a connection.', !vectorTrails);
 });
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
@@ -253,7 +254,7 @@ $('trails').addEventListener('click', (e) => {
   if (!fixtureMode) localStorage.setItem('trailsOn', trailsOn ? '1' : '0');
   if (vectorTrails) {
     setTrailVisibility();
-    status(trailsOn ? 'Trails on.' : 'Trails off.');
+    status(trailsOn ? 'Trails on. Norway only.' : 'Trails off.');
   } else {
     status('Trail data needs a connection.');
   }
