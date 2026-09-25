@@ -22,14 +22,14 @@ done < "$tmp/tiles"
 docker run --rm -v "$tmp:/data" python:3.13-slim sh -ceu '
   pip install -q mapbox-vector-tile
   python - <<"PY"
-import gzip, json
+import gzip, json, os
 from mapbox_vector_tile import decode
 required = ("osm_id", "name", "grade", "mtbclass", "highway", "tracktype")
 samples = []
 for z in (11, 13, 16):
  features = decode(gzip.decompress(open(f"/data/{z}.mvt", "rb").read()))["trails"]["features"]
  feature = next(f for f in features if set(required) <= f["properties"].keys())
- samples.append({"z": z, "properties": feature["properties"]})
+ samples.append({"z": z, "properties": feature["properties"], "tile_bytes": os.path.getsize(f"/data/{z}.mvt")})
 open("/data/samples.json", "w").write(json.dumps(samples))
 PY
 '
@@ -54,4 +54,5 @@ for sample in samples:
  expected = {'name': tags.get('name', ''), 'grade': tags.get('mtb:scale', ''), 'mtbclass': tags.get('class:bicycle:mtb', ''), 'highway': tags['highway'], 'tracktype': tags.get('tracktype', '')}
  assert {key: props[key] for key in expected} == expected, (sample['z'], props, expected)
  print(f"z{sample['z']} {props['osm_id']}: properties match PBF")
+print(f"largest sampled tile: {max(sample['tile_bytes'] for sample in samples)} bytes")
 PY
