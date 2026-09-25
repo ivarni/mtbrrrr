@@ -24,7 +24,7 @@ The production trail archive is generated and deployed separately. See [the Rock
 
 ## Data and attribution
 
-Trail data is derived from [OpenStreetMap](https://www.openstreetmap.org/copyright) and is available under the [ODbL](https://opendatacommons.org/licenses/odbl/). Base-map and elevation tiles have their own terms.
+Trail data is derived from [OpenStreetMap](https://www.openstreetmap.org/copyright) and is available under the [ODbL](https://opendatacommons.org/licenses/odbl/). When distributing a PMTiles archive, retain this attribution and ODbL notice, and publish the matching `data/<release>/latest.json` so recipients can identify the Geofabrik PBF URL and source timestamp. Base-map and elevation tiles have their own terms.
 
 ## License
 

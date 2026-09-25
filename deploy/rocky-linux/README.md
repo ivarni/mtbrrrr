@@ -276,9 +276,21 @@ Tilemaker's cgroup memory, CPU, and block I/O every two seconds in `tilemaker-st
 Each sample also records Tilemaker's `--store` plus staging-disk use. On hosts with kernel I/O
 pressure support it records pressure averages; otherwise it records host disk metrics in
 `host-iostat.txt` and requires `sysstat`. `build-time.txt` records the build start and finish.
-Review those files while the host is under normal load before scheduling builds. The script validates the archive, then atomically replaces
-`site/data/latest.json`. Release names are immutable: the script refuses an existing name. Keep
-the previous release directory for rollback. Verify the published z11, z13, and z16 samples
+Review those files while the host is under normal load before scheduling builds. Initial
+operating ceilings are 3 GiB Tilemaker memory, 2 GiB tracked scratch, 50% disk utilization, and
+100 ms write wait. Keep Caddy, Minecraft, and the map responsive; lower these ceilings if the
+host needs more headroom.
+
+The script validates the archive, stores its manifest as `site/data/<release>/latest.json`, then
+atomically replaces `site/data/latest.json`. Release names are immutable: the script refuses an
+existing name. Keep the previous release directory for rollback. Restore it without an app deploy:
+
+```sh
+cp "site/data/<release>/latest.json" "site/data/.latest.json.$$"
+mv "site/data/.latest.json.$$" site/data/latest.json
+```
+
+Verify the published z11, z13, and z16 samples
 against the PBF without rebuilding:
 
 ```sh
