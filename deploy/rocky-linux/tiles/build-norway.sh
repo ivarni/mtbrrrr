@@ -29,13 +29,16 @@ docker run -d --name "$container" \
   -v "$tiles:/data" -v "$staging:/out" \
   ghcr.io/systemed/tilemaker@sha256:d3eda2790458de727bb0096eebce775984fc060f60901dac6dbfbbb79ae17370 \
   --input "/data/${pbf##*/}" --output /out/trails.pmtiles --config /data/config.json --process /data/process.lua --store /data/.store >/dev/null
+printf 'timestamp\tmemory\tcpu\tblock_io\tscratch_kib\tio_some_avg10\tio_full_avg10\n' > "$staging/tilemaker-stats.tsv"
 (
   while [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)" = true ]; do
-    printf '%s\t' "$(date -u +%FT%TZ)"
-    docker stats --no-stream --format '{{.MemUsage}}\t{{.CPUPerc}}\t{{.BlockIO}}' "$container" || true
+    stats=$(docker stats --no-stream --format '{{.MemUsage}}\t{{.CPUPerc}}\t{{.BlockIO}}' "$container")
+    scratch=$(du -sk "$tiles/.store" "$staging" | awk '{ total += $1 } END { print total }')
+    io_pressure=$(awk '/^some / { split($2, a, "="); some = a[2] } /^full / { split($2, a, "="); full = a[2] } END { print some "\t" full }' /proc/pressure/io)
+    printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$stats" "$scratch" "$io_pressure"
     sleep 2
   done
-) > "$staging/tilemaker-stats.tsv" &
+) >> "$staging/tilemaker-stats.tsv" &
 monitor=$!
 docker wait "$container" > "$staging/tilemaker-exit.txt"
 wait "$monitor" || true

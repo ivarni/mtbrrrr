@@ -273,8 +273,9 @@ reads the Geofabrik PBF replication timestamp itself and records it in the manif
 
 It downloads a fresh PBF, builds directly to `site/data/<release>/trails.pmtiles`, and samples
 Tilemaker's cgroup memory, CPU, and block I/O every two seconds in `tilemaker-stats.tsv`.
-`build-time.txt` records the build start and finish. Review those files while the host is under
-normal load before scheduling builds. The script validates the archive, then atomically replaces
+Each sample also records Tilemaker's `--store` plus staging-disk use and host I/O-pressure
+averages. `build-time.txt` records the build start and finish. Review those files while the host
+is under normal load before scheduling builds. The script validates the archive, then atomically replaces
 `site/data/latest.json`. Release names are immutable: the script refuses an existing name. Keep
 the previous release directory for rollback.
 
