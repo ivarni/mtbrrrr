@@ -237,6 +237,8 @@ map.on('load', async () => {
     : { type: 'geojson', data: emptyFC() });
 
   const trailSource = { source: 'trails', ...(vectorTrails && { 'source-layer': 'trails' }) };
+  // Draw trails under the base map's labels, like mtbmap.no, so place names stay readable.
+  const belowLabels = map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
   const TRAIL_COLOR = [
     'match', ['get', 'grade'],
     '0', '#22c55e',   // green
@@ -250,16 +252,17 @@ map.on('load', async () => {
   const TRAIL_OPACITY = ['case', ['<', ['to-number', ['get', 'mtbclass'], 0], 0], 0.4, 1];
 
   // Below z11 the archive only holds graded and named trails: draw them as thin solid
-  // difficulty lines, like mtbmap.no's overview. The detailed styling takes over at z11.
+  // difficulty lines that fade as you zoom out, like mtbmap.no's overview. The detailed
+  // styling takes over at z11.
   map.addLayer({
     id: 'trails-overview', type: 'line', ...trailSource, maxzoom: 11,
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': TRAIL_COLOR,
-      'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.75, 8, 1, 11, 2],
-      'line-opacity': TRAIL_OPACITY,
+      'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.5, 8, 0.75, 11, 2],
+      'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, ['*', 0.5, TRAIL_OPACITY], 11, TRAIL_OPACITY],
     },
-  });
+  }, belowLabels);
 
   // From z11, mtbmap.no's look: a solid difficulty-coloured line with the way type drawn
   // as a black pattern on top, and a thin class:bicycle:mtb halo underneath.
@@ -270,7 +273,7 @@ map.on('load', async () => {
     id, type: 'line', ...trailSource, minzoom: 11, filter,
     layout: { 'line-cap': cap, 'line-join': 'round' },
     paint,
-  });
+  }, belowLabels);
 
   // Yellow class:bicycle:mtb halo for ways good for MTB. mtbclass is a string; to-number("")
   // → 0 so untagged/zero paths get none. Poor ones (< 0) just fade via TRAIL_OPACITY.
@@ -318,7 +321,7 @@ map.on('load', async () => {
       'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10, 14, 12],
     },
     paint: { 'text-color': '#1f2937', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
-  });
+  }, belowLabels);
 
   status(vectorTrails
     ? 'Ready. Trails cover Norway only.'
