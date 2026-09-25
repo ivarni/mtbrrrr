@@ -43,7 +43,7 @@ for sample in json.load(open("/out/samples.json")):
  subprocess.run(["osmium", "getid", "/data/norway-latest.osm.pbf", f"w{way}", "-o", f"/out/{way}.osm"], check=True)
 PY
 '
-docker run --rm -v "$tmp:/data:ro" python:3.13-slim python - <<'PY'
+docker run --rm -i -v "$tmp:/data:ro" python:3.13-slim python - <<'PY'
 import json
 import xml.etree.ElementTree as ET
 samples = json.load(open('/data/samples.json'))
