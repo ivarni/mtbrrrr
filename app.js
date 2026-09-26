@@ -16,7 +16,12 @@ const trailsReady = (fixtureUrl ? Promise.resolve(fixtureUrl) : manifest).then(a
   const { PMTiles, Protocol } = await import('https://cdn.jsdelivr.net/npm/pmtiles@4.3.0/+esm');
   const protocol = new Protocol();
   maplibregl.addProtocol('pmtiles', protocol.tile);
-  protocol.add(new PMTiles(archiveUrl));
+  const archive = new PMTiles(archiveUrl);
+  protocol.add(archive);
+  // Fetch the header + root directory while the base map loads; MapLibre's first request reuses it.
+  // pmtiles caches a failed header fetch for good, so on failure swap in a fresh instance and let
+  // MapLibre's own first request retry.
+  archive.getHeader().catch(() => protocol.add(new PMTiles(archiveUrl)));
   vectorTrails = archiveUrl;
 }).catch(() => {});
 
@@ -192,7 +197,8 @@ map.on('moveend', () => {
 });
 
 // ---------- layers added once style is ready ----------
-map.on('load', async () => {
+// style.load, not load: load waits for base tiles, fonts and sprites, delaying the first trail tile.
+map.once('style.load', async () => {
   await trailsReady;
   // MapTiler Outdoor already ships hillshade + contours, so only add our own keyless
   // Terrarium DEM hillshade on the Liberty fallback (which has none).
@@ -251,7 +257,8 @@ map.on('load', async () => {
   const trailSource = { source: 'trails', ...(vectorTrails && { 'source-layer': 'trails' }) };
   // Draw trails above every base line/fill (water, paths, routes, lifts) but under the labels,
   // like mtbmap.no, so place names stay readable. MapTiler puts contour labels early, so anchor
-  // on the first symbol layer after the last non-border line layer, not the first symbol overall.
+  // on the first symbol layer after the last non-border line layer, not the first symbol overall;
+  // trails deliberately cover those contour labels.
   const baseLayers = map.getStyle().layers;
   const lastLine = baseLayers.findLastIndex((l) => l.type === 'line' && !/border/i.test(l.id));
   const belowLabels = baseLayers.slice(lastLine + 1).find((l) => l.type === 'symbol')?.id;

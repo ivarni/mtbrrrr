@@ -36,6 +36,10 @@
   <div id="map"></div>
   <div id="status"></div>
 
+  <!-- Fetch app.js's libraries in parallel with app.js instead of after it. -->
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm" />
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/pmtiles@4.3.0/+esm" />
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm" />
   <script type="module" src="./app.js"></script>
 </body>
 </html>
