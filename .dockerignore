@@ -1,8 +1,0 @@
-.git
-.idea
-.claude
-deploy/overpass
-
-# Terraform state can hold credentials. The Dockerfile copies files by name so this is not
-# load-bearing for what ends up in the image — it keeps the state out of the build context.
-deploy/site/infra

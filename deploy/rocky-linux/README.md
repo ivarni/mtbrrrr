@@ -3,21 +3,15 @@
 Runs mtbrrrr on one server you own:
 
 - the static PWA at `https://mtb.<your-domain>`, behind HTTP basic auth (optional, on by default)
-- an optional self-hosted Norway Overpass API at `https://overpass.<your-domain>` for rollback and data checks
+- the versioned PMTiles trail archive in `site/data/`, built on the box by `tiles/build-norway.sh`
 
-The browser uses the versioned PMTiles archive in `site/data/`; it does not call Overpass.
-Examples below use `<your-domain>` — substitute yours, or `source .env` so `$SITE_DOMAIN` /
-`$OVERPASS_DOMAIN` fill in.
+Examples below use `<your-domain>` — substitute yours, or `source .env` so `$SITE_DOMAIN` fills in.
 
-One `docker compose` stack does it. **Caddy** is the only thing on ports 80/443 — it
-terminates TLS, serves the static PWA and PMTiles archive, and reverse-proxies the optional
-Overpass service. **Overpass** (`wiktorn/overpass-api`) is internal-only. This replaces the
-Scaleway nginx container, the Scaleway Overpass VM + Caddy, and all of Terraform (`../site/`,
-`../overpass/`) — those are kept only as reference/rollback.
+One `docker compose` service does it. **Caddy** is the only thing on ports 80/443 — it
+terminates TLS and serves the static PWA and the PMTiles archive.
 
 ```
-browser ──443──▶ caddy ──┬─ file_server  /srv/site      (mtb.<domain>, basic auth: optional, on by default)
-                         └─ reverse_proxy overpass:80    (overpass.<domain>, CORS)
+browser ──443──▶ caddy ── file_server  /srv/site   (mtb.<domain>, basic auth: optional, on by default)
 ```
 
 ---
@@ -31,41 +25,28 @@ Assumed already in place (this guide won't walk you through them):
 - A **public IP** with TCP **80 and 443** reachable — opened in firewalld (`http`/`https`
   services) and forwarded through any NAT. (If your ISP blocks inbound 80, Caddy still gets
   certs via TLS-ALPN on 443 — but 80 also redirects http→https, so forward it if you can.)
-- DNS you control for your domain (the app expects the convention site `mtb.<domain>`,
-  Overpass `overpass.<domain>` — same base domain, at least three labels).
+- DNS you control for your domain.
 
-Project-specific sizing you do need to get right:
+**Disk**: each Norway release is ~375 MB, and a build needs the 1.3 GB PBF plus ~2 GiB of
+Tilemaker scratch. Keep a few GB free for the current release, the previous one, and a build.
 
-- **Disk**: the Norway DB is ~10–20 GB, and the first import needs the 1.3 GB PBF plus
-  osmium scratch on top. Have **≥ 30 GB free** on the docker data-root (default
-  `/var/lib/docker`). Check before importing:
-  ```sh
-  df -h /var/lib/docker
-  ```
-  If root is small but you have a data disk, either point the docker data-root at it
-  (`/etc/docker/daemon.json` → `{"data-root": "/mnt/data/docker"}`, then
-  `systemctl restart docker`) **before** the first `up`, or replace the `overpass_db` named
-  volume in `docker-compose.yml` with a bind mount to the disk (add `:Z` for SELinux).
-
-**SELinux** can stay **enforcing** — the compose file labels its bind mounts (`:Z`) and the DB
-is a named volume, so no manual relabeling is needed. (If a mount ever 403s after you edit
+**SELinux** can stay **enforcing** — the compose file labels its bind mounts (`:Z`), so no
+manual relabeling is needed. (If a mount ever 403s after you edit
 files on the host, `sudo restorecon -Rv deploy/rocky-linux/site deploy/rocky-linux/caddy`
 fixes the labels.)
 
 ## 1. DNS
 
-Point both hostnames at the box's public IP and wait for them to resolve **before** the first
+Point the site hostname at the box's public IP and wait for it to resolve **before** the first
 `up` (Caddy asks Let's Encrypt for a cert the moment it starts; a name that doesn't resolve
 yet fails the challenge and backs off):
 
 ```
 mtb        IN  A   <server-public-ip>
-overpass   IN  A   <server-public-ip>
 ```
 
 ```sh
-dig +short mtb.<your-domain>
-dig +short overpass.<your-domain>   # both must return the server IP
+dig +short mtb.<your-domain>   # must return the server IP
 ```
 
 ## 2. Get the code and configure
@@ -80,7 +61,7 @@ cp .env.example .env
 Edit `.env`:
 
 - `ACME_EMAIL` — your email.
-- `SITE_DOMAIN` / `OVERPASS_DOMAIN` — set to `mtb.<your-domain>` / `overpass.<your-domain>`.
+- `SITE_DOMAIN` — set to `mtb.<your-domain>`.
 - `SITE_AUTH_SNIPPET` — the auth toggle. Leave it at `/etc/caddy/auth-on.conf` (the default,
   which also applies if you delete the line) to require a login, or set it to
   `/etc/caddy/auth-off.conf` to serve the map publicly. With auth off, skip `SITE_USER` /
@@ -94,8 +75,6 @@ Edit `.env`:
   echo 'your-password' | docker run --rm -i caddy:2 caddy hash-password | sed 's/\$/\$\$/g'
   ```
   (A wrong/mangled hash surfaces as a 401 in step 6.) Auth-on only.
-- `SITE_ORIGIN_REGEX` — `https://` + `SITE_DOMAIN` with the dots escaped, e.g.
-  `https://mtb\.example\.com`.
 
 ## 3. Publish the site files
 
@@ -136,9 +115,7 @@ docker run --rm --env-file .env -e SITE_AUTH_SNIPPET=/etc/caddy/auth-off.conf \
 docker compose up -d
 ```
 
-- **Caddy** comes up in seconds and provisions the two certs. Watch: `docker compose logs -f caddy`.
-- **Overpass**, if retained for rollback or data checks, downloads Norway (~1.3 GB), converts
-  PBF→bz2 with osmium, and imports. Reference: **~45 min** on decent hardware.
+Caddy comes up in seconds and provisions the cert. Watch: `docker compose logs -f caddy`.
 
 Verify the basic-auth hash reached the container intact (do this once — **auth-on only**; skip
 if you set `SITE_AUTH_SNIPPET=/etc/caddy/auth-off.conf`):
@@ -147,28 +124,10 @@ if you set `SITE_AUTH_SNIPPET=/etc/caddy/auth-off.conf`):
 docker compose exec caddy printenv SITE_PASSWORD_HASH   # must be the single-$ hash (de-escaped)
 ```
 
-### Watching the import (progress vs. crash loop)
-
-A "curl until 200" poll can't tell a slow import from a crash loop. Use these:
-
-```sh
-docker inspect -f '{{.RestartCount}}' overpass   # judge a loop by a GROWING count, not by non-zero
-docker system df -v | grep overpass_db           # volume size growing = downloading/importing
-docker compose logs -f overpass
-```
-
-Two things that look alarming and are **not**:
-
-- **One restart right after init is normal** — the image self-stops after init
-  (`OVERPASS_STOP_AFTER_INIT`) and `restart: unless-stopped` revives it. A *growing* count is
-  a real loop.
-- **Hourly `ERROR: Error while downloading diffs` / `status code: 3`** is pyosmium saying
-  "no new data" — harmless.
-
 ## 6. Verify it's live
 
 ```sh
-set -a; source .env; set +a    # pull $SITE_DOMAIN / $OVERPASS_DOMAIN in, so these are generic
+set -a; source .env; set +a    # pull $SITE_DOMAIN in, so these are generic
 
 # Site, auth ON (default): 401 without creds, 200 with.
 # ALWAYS run the no-creds check when you intend auth to be on — it is the ONE guard against
@@ -180,10 +139,6 @@ curl -sI -u 'USER:PASS' "https://$SITE_DOMAIN/" | head -1       # HTTP/2 200
 
 # sw.js must not be long-cached.
 curl -sI -u 'USER:PASS' "https://$SITE_DOMAIN/sw.js" | grep -i cache-control   # no-cache
-
-# Overpass: 200, and EXACTLY ONE access-control-allow-origin header echoing the site origin.
-curl -s -H "Origin: https://$SITE_DOMAIN" -D- -o /dev/null \
-  "https://$OVERPASS_DOMAIN/api/interpreter?data=[out:json];way(59.90,10.65,59.95,10.70)[highway];out geom;"
 ```
 
 Then open `https://$SITE_DOMAIN` on a phone: it should prompt for basic auth once (only when
@@ -215,8 +170,8 @@ re-publish — the app falls back to OpenFreeMap Liberty + its own hillshade.)
   install -Dm644 -t site ../../index.html ../../app.js ../../sw.js ../../manifest.webmanifest
   docker compose restart caddy
   ```
-  When you change `app.js`/`sw.js` meaningfully, bump `APP_CACHE` in `sw.js` (currently
-  `app-v12`) so clients drop the stale shell. **Never** rename `TILE_CACHE` — that throws away
+  When you change `app.js`/`sw.js` meaningfully, bump `APP_CACHE` in `sw.js` so clients drop
+  the stale shell. **Never** rename `TILE_CACHE` — that throws away
   every cached tile/DEM/trail response on every installed device. On a phone the new service
   worker needs ~2 reloads to take control.
 
@@ -299,15 +254,15 @@ against the PBF without rebuilding:
 
 ## Reboot / persistence
 
-`restart: unless-stopped` plus the enabled docker service brings the whole stack back after a
-reboot — nothing else to do. The DB is in the `overpass_db` volume and is not re-imported.
+`restart: unless-stopped` plus the enabled docker service brings Caddy back after a reboot —
+nothing else to do. Published releases live in `site/data/` on the host.
 
 If you'd rather have systemd own it explicitly, drop this at
 `/etc/systemd/system/mtbrrrr.service` and `systemctl enable mtbrrrr`:
 
 ```ini
 [Unit]
-Description=mtbrrrr (caddy + overpass)
+Description=mtbrrrr (caddy)
 Requires=docker.service
 After=docker.service
 
@@ -328,14 +283,22 @@ WantedBy=multi-user.target
 |---|---|
 | Cert never issues, Caddy logs ACME failures | DNS not resolving to the box yet, or 80/443 not reachable (firewall/NAT). Confirm `dig`, and that the ports are forwarded. |
 | 401 on everything, even with correct password | `SITE_PASSWORD_HASH` not `$$`-escaped in `.env` (or wrong password). Re-run the `printenv` check in step 5 — the container must show the single-`$` hash; fix the escaping and `docker compose up -d`. |
-| Overpass "download loop", disk filling, no import | `OVERPASS_PLANET_PREPROCESS` was removed/edited — it must stay (see the comment in `docker-compose.yml`). |
-| Two `access-control-allow-origin` headers / browser CORS error | A `defer` was dropped from the Caddyfile header ops, or the `@other_origin` strip block was removed. |
 | Map loads but no base tiles (403 from `api.maptiler.com`) | MapTiler referrer allow-list — step 7. |
-| Overpass import out of disk | The disk sizing in Prerequisites — relocate the docker data-root or bind-mount `overpass_db` to a bigger disk, then re-run `docker compose up -d` (it re-imports). |
 | Site serves the wrong/old file after `git pull` | You forgot to re-run the `install` in step 3 and `docker compose restart caddy`. |
 
 ## Reference
 
 - `../MAPTILER.md` — MapTiler key + origin restrictions.
-- `../overpass/INFRA.md` — deep Overpass background (import tuning, diff cadence, traps).
-- `../site/SITE.md`, `../overpass/*` — the retired Scaleway setup, kept for rollback.
+
+## Removing Overpass from an existing install
+
+Earlier versions of this stack also ran a self-hosted Overpass API. The app no longer uses it.
+After pulling a version without it:
+
+```sh
+docker compose up -d --remove-orphans      # stops and removes the old overpass container
+docker volume ls | grep overpass_db        # the Norway DB, ~10–20 GB
+docker volume rm rocky-linux_overpass_db   # use the exact name printed above
+```
+
+Then delete `OVERPASS_DOMAIN` and `SITE_ORIGIN_REGEX` from `.env` and the `overpass` DNS record.

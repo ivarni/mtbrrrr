@@ -13,14 +13,15 @@ Trail data needs a connection. The app shell can open offline, but it does not p
 
 ## Run locally
 
-GPS and service workers require HTTPS or `localhost`:
+GPS and service workers require HTTPS or `localhost`, and PMTiles needs HTTP byte ranges, so `run-locally.sh` serves the repo with Caddy in Docker. Build a fixture archive first:
 
 ```sh
-python3 -m http.server 8000
-# open http://localhost:8000
+deploy/rocky-linux/tiles/build-fixture.sh nittedal
+./run-locally.sh
+# open http://localhost:8000/index.html?fixture=nittedal
 ```
 
-The production trail archive is generated and deployed separately. See [the Rocky Linux runbook](deploy/rocky-linux/README.md) to build, inspect, and publish it. Its fixture preview uses Caddy because PMTiles needs HTTP byte ranges.
+The production trail archive is generated and deployed separately. See [the Rocky Linux runbook](deploy/rocky-linux/README.md) to build, inspect, and publish it.
 
 ## Data and attribution
 
