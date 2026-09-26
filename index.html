@@ -8,29 +8,11 @@
   <title>mtbrrrr</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
   <style>
-    :root { --bg: #1b3a2b; --panel: rgba(20,20,20,.82); --fg: #fff; --accent: #4ade80; }
+    :root { --bg: #1b3a2b; --panel: rgba(20,20,20,.82); --fg: #fff; }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden; background: #000;
       font-family: -apple-system, system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
     #map { position: absolute; inset: 0; }
-
-    /* Control panel, bottom so it stays reachable one-handed */
-    #panel {
-      position: absolute; left: 0; right: 0; bottom: 0;
-      padding: 10px calc(10px + env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left));
-      display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
-      background: linear-gradient(to top, rgba(0,0,0,.55), transparent);
-      pointer-events: none;
-    }
-    #panel > * { pointer-events: auto; }
-    button, label.btn {
-      background: var(--panel); color: var(--fg); border: 1px solid rgba(255,255,255,.18);
-      border-radius: 22px; padding: 12px 16px; font-size: 15px; font-weight: 600;
-      backdrop-filter: blur(8px); cursor: pointer; min-height: 46px; display: inline-flex;
-      align-items: center; gap: 6px; user-select: none;
-    }
-    button:active, label.btn:active { background: var(--accent); color: #06210f; }
-    input[type=file] { display: none; }
 
     /* Compass cone under MapLibre's location dot; points up (north) at rotation 0. */
     .heading-cone {
@@ -53,10 +35,6 @@
 <body>
   <div id="map"></div>
   <div id="status"></div>
-  <div id="panel">
-    <label class="btn" for="gpx" title="Load a GPX file">📈 GPX</label>
-    <input type="file" id="gpx" accept=".gpx,application/gpx+xml" />
-  </div>
 
   <script type="module" src="./app.js"></script>
 </body>

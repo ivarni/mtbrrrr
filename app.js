@@ -174,13 +174,6 @@ map.on('moveend', () => {
 
 // ---------- layers added once style is ready ----------
 map.on('load', async () => {
-  map.addSource('gpx', { type: 'geojson', data: emptyFC() });
-  map.addLayer({
-    id: 'gpx-line', type: 'line', source: 'gpx',
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': '#a855f7', 'line-width': 5, 'line-opacity': 0.9 },
-  });
-
   await trailsReady;
   // MapTiler Outdoor already ships hillshade + contours, so only add our own keyless
   // Terrarium DEM hillshade on the Liberty fallback (which has none).
@@ -329,58 +322,6 @@ map.on('load', async () => {
 });
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
-// ---------- GPX overlay ----------
-$('gpx').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  try {
-    const text = await file.text();
-    const fc = gpxToGeoJSON(text);
-    if (!fc.features.length) { status('No tracks found in GPX.'); return; }
-    map.getSource('gpx').setData(fc);
-    const bounds = fcBounds(fc);
-    if (bounds) map.fitBounds(bounds, { padding: 60, maxZoom: 15 });
-    status(`Loaded ${file.name}`);
-  } catch (err) {
-    status('GPX error: ' + err.message);
-  } finally {
-    e.target.value = '';
-  }
-});
-
-// Minimal GPX parser: track + route points -> LineStrings. No dependency needed.
-function gpxToGeoJSON(text) {
-  const xml = new DOMParser().parseFromString(text, 'application/xml');
-  const features = [];
-  const collect = (tag) => {
-    for (const seg of xml.getElementsByTagName(tag)) {
-      const pts = seg.getElementsByTagName('trkpt').length
-        ? seg.getElementsByTagName('trkpt')
-        : seg.getElementsByTagName('rtept');
-      const coords = [];
-      for (const pt of pts) {
-        const lon = parseFloat(pt.getAttribute('lon'));
-        const lat = parseFloat(pt.getAttribute('lat'));
-        if (!isNaN(lon) && !isNaN(lat)) coords.push([lon, lat]);
-      }
-      if (coords.length > 1) features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } });
-    }
-  };
-  collect('trkseg');
-  collect('rte');
-  return { type: 'FeatureCollection', features };
-}
-
-function fcBounds(fc) {
-  let b = null;
-  for (const f of fc.features) {
-    for (const c of f.geometry.coordinates) {
-      if (!b) b = new maplibregl.LngLatBounds(c, c);
-      else b.extend(c);
-    }
-  }
-  return b;
-}
 
 // ---------- service worker ----------
 if ('serviceWorker' in navigator) {
