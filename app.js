@@ -135,7 +135,7 @@ geolocate.on('geolocate', (p) => {
   // Slowed down: don't leave a stale course; fall back to the compass, or hide without one.
   else if (wasMoving) compassHeading != null ? showHeading(compassHeading) : hideHeading();
 });
-// Fires synchronously inside the Locate tap, so iOS accepts the permission request here.
+// Fires synchronously inside the GPS button tap, so iOS accepts the permission request here.
 // requestPermission must be the first call: an await before it would lose the user gesture.
 geolocate.on('trackuserlocationstart', () => {
   const ask = window.DeviceOrientationEvent?.requestPermission;
@@ -329,9 +329,6 @@ map.on('load', async () => {
 });
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
-// ---------- Locate ----------
-$('locate').addEventListener('click', () => geolocate.trigger());
-
 // ---------- GPX overlay ----------
 $('gpx').addEventListener('change', async (e) => {
   const file = e.target.files[0];

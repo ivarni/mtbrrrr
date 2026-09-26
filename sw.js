@@ -3,7 +3,7 @@
 // keep-list, so install() refetches the shell instead of relying on stale-while-revalidate to
 // notice. Leave TILE_CACHE alone — renaming it would throw away the map tiles, DEM and trail
 // data that make cached areas work offline.
-const APP_CACHE = 'app-v19';
+const APP_CACHE = 'app-v20';
 const TILE_CACHE = 'tiles-v1';
 
 // Local app shell to precache on install.
