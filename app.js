@@ -249,8 +249,12 @@ map.on('load', async () => {
     : { type: 'geojson', data: emptyFC() });
 
   const trailSource = { source: 'trails', ...(vectorTrails && { 'source-layer': 'trails' }) };
-  // Draw trails under the base map's labels, like mtbmap.no, so place names stay readable.
-  const belowLabels = map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+  // Draw trails above every base line/fill (water, paths, routes, lifts) but under the labels,
+  // like mtbmap.no, so place names stay readable. MapTiler puts contour labels early, so anchor
+  // on the first symbol layer after the last non-border line layer, not the first symbol overall.
+  const baseLayers = map.getStyle().layers;
+  const lastLine = baseLayers.findLastIndex((l) => l.type === 'line' && !/border/i.test(l.id));
+  const belowLabels = baseLayers.slice(lastLine + 1).find((l) => l.type === 'symbol')?.id;
   const TRAIL_COLOR = [
     'match', ['get', 'grade'],
     '0', '#22c55e',   // green
