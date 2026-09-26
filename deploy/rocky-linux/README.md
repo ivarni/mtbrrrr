@@ -1,21 +1,19 @@
 # Self-hosting mtbrrrr on a Rocky Linux box
 
-Runs **both** halves of mtbrrrr on one server you own:
+Runs mtbrrrr on one server you own:
 
 - the static PWA at `https://mtb.<your-domain>`, behind HTTP basic auth (optional, on by default)
-- the self-hosted Norway Overpass API at `https://overpass.<your-domain>`
+- an optional self-hosted Norway Overpass API at `https://overpass.<your-domain>` for rollback and data checks
 
-Nothing is hardcoded to a specific domain: you set yours in `.env`, and the static app derives
-its Overpass endpoint from its own origin (convention: site `mtb.<domain>` → Overpass
-`overpass.<domain>`). Examples below use `<your-domain>` — substitute yours, or `source .env`
-so `$SITE_DOMAIN` / `$OVERPASS_DOMAIN` fill in.
+The browser uses the versioned PMTiles archive in `site/data/`; it does not call Overpass.
+Examples below use `<your-domain>` — substitute yours, or `source .env` so `$SITE_DOMAIN` /
+`$OVERPASS_DOMAIN` fill in.
 
 One `docker compose` stack does it. **Caddy** is the only thing on ports 80/443 — it
-terminates TLS (automatic Let's Encrypt), serves the four static files, and reverse-proxies
-Overpass with CORS locked to the site origin. **Overpass** (`wiktorn/overpass-api`) holds a
-Norway extract and is internal-only. This replaces the Scaleway nginx container, the Scaleway
-Overpass VM + Caddy, and all of Terraform (`../site/`, `../overpass/`) — those are kept only
-as reference/rollback.
+terminates TLS, serves the static PWA and PMTiles archive, and reverse-proxies the optional
+Overpass service. **Overpass** (`wiktorn/overpass-api`) is internal-only. This replaces the
+Scaleway nginx container, the Scaleway Overpass VM + Caddy, and all of Terraform (`../site/`,
+`../overpass/`) — those are kept only as reference/rollback.
 
 ```
 browser ──443──▶ caddy ──┬─ file_server  /srv/site      (mtb.<domain>, basic auth: optional, on by default)
@@ -82,9 +80,7 @@ cp .env.example .env
 Edit `.env`:
 
 - `ACME_EMAIL` — your email.
-- `SITE_DOMAIN` / `OVERPASS_DOMAIN` — set to `mtb.<your-domain>` / `overpass.<your-domain>`
-  (same base domain; the app derives the Overpass host from the site origin — see the note in
-  `.env.example`).
+- `SITE_DOMAIN` / `OVERPASS_DOMAIN` — set to `mtb.<your-domain>` / `overpass.<your-domain>`.
 - `SITE_AUTH_SNIPPET` — the auth toggle. Leave it at `/etc/caddy/auth-on.conf` (the default,
   which also applies if you delete the line) to require a login, or set it to
   `/etc/caddy/auth-off.conf` to serve the map publicly. With auth off, skip `SITE_USER` /
@@ -103,14 +99,16 @@ Edit `.env`:
 
 ## 3. Publish the site files
 
-Caddy's web root must contain **only** the four app files (pointing it at the repo root would
-serve `.git/`, `deploy/`, etc.). Copy them into the gitignored `site/` dir:
+Caddy's web root is the gitignored `site/` dir. It contains the four app files plus generated
+`data/`; never point Caddy at the repo root. Build and publish a PMTiles release before deploying
+an app version that requires `data/latest.json`, then copy the app files:
 
 ```sh
 install -Dm644 -t site ../../index.html ../../app.js ../../sw.js ../../manifest.webmanifest
 ```
 
-Re-run this one line whenever you change an app file (then `docker compose restart caddy`).
+Re-run this after changing an app file, then `docker compose restart caddy`. It does not remove
+published data.
 
 ## 4. Validate the config
 
@@ -132,15 +130,15 @@ docker run --rm --env-file .env -e SITE_AUTH_SNIPPET=/etc/caddy/auth-off.conf \
   caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
 ```
 
-## 5. First start — this triggers the Overpass import
+## 5. First start
 
 ```sh
 docker compose up -d
 ```
 
 - **Caddy** comes up in seconds and provisions the two certs. Watch: `docker compose logs -f caddy`.
-- **Overpass** now downloads Norway (~1.3 GB), converts PBF→bz2 with osmium, and imports.
-  Reference: **~45 min** on decent hardware; the import is the heaviest thing this box does.
+- **Overpass**, if retained for rollback or data checks, downloads Norway (~1.3 GB), converts
+  PBF→bz2 with osmium, and imports. Reference: **~45 min** on decent hardware.
 
 Verify the basic-auth hash reached the container intact (do this once — **auth-on only**; skip
 if you set `SITE_AUTH_SNIPPET=/etc/caddy/auth-off.conf`):
@@ -218,7 +216,7 @@ re-publish — the app falls back to OpenFreeMap Liberty + its own hillshade.)
   docker compose restart caddy
   ```
   When you change `app.js`/`sw.js` meaningfully, bump `APP_CACHE` in `sw.js` (currently
-  `app-v5`) so clients drop the stale shell. **Never** rename `TILE_CACHE` — that throws away
+  `app-v12`) so clients drop the stale shell. **Never** rename `TILE_CACHE` — that throws away
   every cached tile/DEM/trail response on every installed device. On a phone the new service
   worker needs ~2 reloads to take control.
 
@@ -238,6 +236,66 @@ re-publish — the app falls back to OpenFreeMap Liberty + its own hillshade.)
   **Upgrading an existing install:** no `.env` change is needed. A plain `git pull` brings the
   new Caddyfile and both snippet files together; with `SITE_AUTH_SNIPPET` absent from your `.env`
   the default keeps auth **on**, exactly as before.
+
+## PMTiles fixture preview
+
+The fixture proves the direct OSM → PMTiles path before a Norway-wide build. It is not a data
+release. Build either the deterministic tiny fixture or the checked-in Nittedal sample:
+
+```sh
+./tiles/build-fixture.sh fixture
+./tiles/build-fixture.sh nittedal
+```
+
+The archive is written to `site/data/<name>/trails.pmtiles`; the command validates its PMTiles
+structure. To inspect it locally with correct byte-range handling:
+
+```sh
+docker run --rm -p 127.0.0.1:8001:80 -v "$PWD/../..:/srv:ro" caddy:2.11.4 \
+  caddy file-server --root /srv --listen :80
+```
+
+Open `http://localhost:8001/index.html?fixture=fixture` or `?fixture=nittedal`. A range check
+must return `206 Partial Content`:
+
+```sh
+curl -s -D - -o /dev/null -H 'Range: bytes=0-99' http://localhost:8001/deploy/rocky-linux/site/data/fixture/trails.pmtiles
+```
+
+## Norway PMTiles build
+
+After the fixture passes, run the country build on the Rocky host, not a laptop. The script
+reads the Geofabrik PBF replication timestamp itself and records it in the manifest:
+
+```sh
+./tiles/build-norway.sh https://download.geofabrik.de/europe/norway-latest.osm.pbf 2026-09-24
+```
+
+It downloads a fresh PBF, builds directly to `site/data/<release>/trails.pmtiles`, and samples
+Tilemaker's cgroup memory, CPU, and block I/O every two seconds in `tilemaker-stats.tsv`.
+Each sample also records Tilemaker's `--store` plus staging-disk use. On hosts with kernel I/O
+pressure support it records pressure averages; otherwise it records host disk metrics in
+`host-iostat.txt` and requires `sysstat`. `build-time.txt` records the build start and finish.
+Review those files while the host is under normal load before scheduling builds. Initial
+operating ceilings are 3 GiB Tilemaker memory, 2 GiB tracked scratch, 50% disk utilization, and
+100 ms write wait. Keep Caddy, Minecraft, and the map responsive; lower these ceilings if the
+host needs more headroom.
+
+The script validates the archive, stores its manifest as `site/data/<release>/latest.json`, then
+atomically replaces `site/data/latest.json`. Release names are immutable: the script refuses an
+existing name. Keep the previous release directory for rollback. Restore it without an app deploy:
+
+```sh
+cp "site/data/<release>/latest.json" "site/data/.latest.json.$$"
+mv "site/data/.latest.json.$$" site/data/latest.json
+```
+
+Verify the published z6 overview and z11, z13, and z16 samples
+against the PBF without rebuilding:
+
+```sh
+./tiles/verify-norway.sh <release>
+```
 
 ## Reboot / persistence
 

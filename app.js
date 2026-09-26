@@ -1,5 +1,25 @@
 import maplibregl from 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm';
 
+// `?fixture=name` uses a local archive; production reads the current immutable archive from
+// data/latest.json. A missing manifest leaves the app shell usable without trail data.
+const requestedFixture = new URLSearchParams(location.search).get('fixture');
+const fixtureName = requestedFixture === '1' ? 'fixture' : requestedFixture;
+const fixtureMode = fixtureName !== null;
+const fixtureUrl = fixtureMode && new URL(`./deploy/rocky-linux/site/data/${fixtureName || 'fixture'}/trails.pmtiles`, location.href).href;
+let vectorTrails = false;
+const manifest = navigator.onLine
+  ? fetch('./data/latest.json', { cache: 'no-store' })
+    .then((res) => res.ok ? res.json() : Promise.reject(new Error(`manifest ${res.status}`)))
+    .then(({ archive }) => new URL(`./data/${archive}`, location.href).href)
+  : Promise.reject(new Error('offline'));
+const trailsReady = (fixtureUrl ? Promise.resolve(fixtureUrl) : manifest).then(async (archiveUrl) => {
+  const { PMTiles, Protocol } = await import('https://cdn.jsdelivr.net/npm/pmtiles@4.3.0/+esm');
+  const protocol = new Protocol();
+  maplibregl.addProtocol('pmtiles', protocol.tile);
+  protocol.add(new PMTiles(archiveUrl));
+  vectorTrails = archiveUrl;
+}).catch(() => {});
+
 // ---------- tiny helpers ----------
 const $ = (id) => document.getElementById(id);
 let statusTimer;
@@ -12,8 +32,18 @@ function status(msg, sticky = false) {
 }
 
 // ---------- persisted view ----------
-const saved = JSON.parse(localStorage.getItem('view') || 'null') ||
-  { center: [10.75, 59.91], zoom: 12 }; // Oslo-ish default
+// A URL hash (#zoom/lat/lng) overrides all of this: MapLibre applies it in the constructor.
+// With no saved view we show all of mainland Norway, then fly to the user if GPS is allowed.
+// MapLibre throws on an out-of-range hash (e.g. a mangled shared link), so drop those first.
+const hashParts = location.hash.slice(1).split('/').map(Number);
+if (location.hash && !(hashParts.length >= 3 && hashParts.every(Number.isFinite) && Math.abs(hashParts[1]) <= 90)) {
+  history.replaceState(history.state, '', location.pathname + location.search);
+}
+const saved = fixtureMode
+  ? { center: [10.8658, 60.0345], zoom: 16 }
+  : JSON.parse(localStorage.getItem('view') || 'null');
+const NORWAY = [[4.5, 57.9], [31.2, 71.2]];
+const firstVisit = !saved && !location.hash; // read now: the map writes a hash as soon as it exists
 
 // ---------- base map ----------
 // MapTiler Outdoor gives topo cartography (contours + hillshade + terrain) close to
@@ -29,9 +59,8 @@ const STYLE_URL = USING_MAPTILER
 const map = new maplibregl.Map({
   container: 'map',
   style: STYLE_URL,
-  center: saved.center,
-  zoom: saved.zoom,
-  hash: false,
+  ...(saved ? { center: saved.center, zoom: saved.zoom } : { bounds: NORWAY }),
+  hash: true,
   maxPitch: 75,
   attributionControl: { compact: true },
 });
@@ -40,12 +69,103 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-
 
 const geolocate = new maplibregl.GeolocateControl({
   positionOptions: { enableHighAccuracy: true },
+  fitBoundsOptions: { maxZoom: 17 },
   trackUserLocation: true,
-  showUserHeading: true,
 });
 map.addControl(geolocate, 'top-left');
 
+// MapLibre 4.x has no heading indicator, so draw our own cone under the location dot. It
+// follows the compass (device orientation) standing still and the GPS course while moving.
+const headingMarker = new maplibregl.Marker({
+  element: Object.assign(document.createElement('div'), { className: 'heading-cone' }),
+  anchor: 'bottom', // the cone's tip sits on the location and is the rotation pivot
+  rotationAlignment: 'map',
+  pitchAlignment: 'map',
+});
+const orientationEvent = 'ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation';
+let lastPosition = null;
+let coneShown = false;
+let compassWanted = false;
+let gpsHeading = null;
+let compassHeading = null; // latest true-north compass reading, kept while moving
+
+// Phone compasses read magnetic north; the map uses true north. ponytail: bilinear fit to
+// WMM-2025 over mainland Norway (max error 0.34°, drifts ~0.2°/year): refit from WMM-2030.
+const declination = ([lon, lat]) => 3.3596 - 0.7328 * lon - 0.0426 * lat + 0.0187 * lon * lat;
+
+function showHeading(degrees) {
+  if (!lastPosition) return;
+  headingMarker.setRotation(degrees);
+  if (!coneShown) { headingMarker.setLngLat(lastPosition).addTo(map); coneShown = true; }
+}
+
+function hideHeading() {
+  headingMarker.remove();
+  coneShown = false;
+}
+
+function onOrientation(e) {
+  // iOS gives degrees clockwise from north (negative = invalid); absolute alpha runs
+  // counter-clockwise. 360 - alpha is where the device's top edge points at any sideways
+  // tilt; the W3C spec's beta/gamma formula is the back-camera direction, undefined held flat.
+  const heading = e.webkitCompassHeading ?? (e.absolute && e.alpha != null ? 360 - e.alpha : null);
+  if (heading == null || heading < 0 || !lastPosition) return;
+  compassHeading = (heading + declination(lastPosition) + (screen.orientation?.angle ?? 0) + 360) % 360;
+  if (gpsHeading == null) showHeading(compassHeading); // moving: the GPS course wins
+}
+
+function stopCompass() {
+  compassWanted = false;
+  lastPosition = null;
+  gpsHeading = null;
+  compassHeading = null;
+  window.removeEventListener(orientationEvent, onOrientation);
+  hideHeading();
+}
+
+geolocate.on('geolocate', (p) => {
+  const { longitude, latitude, heading, speed } = p.coords;
+  lastPosition = [longitude, latitude];
+  headingMarker.setLngLat(lastPosition);
+  // Above ~2 m/s (7 km/h) the GPS course is true-north and steadier than the compass.
+  const wasMoving = gpsHeading != null;
+  gpsHeading = speed > 2 && Number.isFinite(heading) ? heading : null;
+  if (!compassWanted) return;
+  if (gpsHeading != null) showHeading(gpsHeading);
+  // Slowed down: don't leave a stale course; fall back to the compass, or hide without one.
+  else if (wasMoving) compassHeading != null ? showHeading(compassHeading) : hideHeading();
+});
+// Fires synchronously inside the Locate tap, so iOS accepts the permission request here.
+// requestPermission must be the first call: an await before it would lose the user gesture.
+geolocate.on('trackuserlocationstart', () => {
+  const ask = window.DeviceOrientationEvent?.requestPermission;
+  compassWanted = true;
+  (ask ? DeviceOrientationEvent.requestPermission() : Promise.resolve('granted'))
+    .then((state) => {
+      if (!compassWanted) return; // tracking stopped while the prompt was open
+      if (state !== 'granted') return status('Compass permission denied.');
+      window.addEventListener(orientationEvent, onOrientation);
+    })
+    .catch(() => {});
+});
+// trackuserlocationend also fires when a pan moves tracking to the background, where
+// MapLibre keeps the dot; only stop when tracking is really off.
+geolocate.on('trackuserlocationend', () => {
+  if (!document.querySelector('.maplibregl-ctrl-geolocate-background')) stopCompass();
+});
+geolocate.on('error', (e) => { if (e.code === 1) stopCompass(); });
+
+// First visit (no hash, no saved view): locate the user only if they already granted GPS,
+// so opening the app never triggers a permission prompt by itself.
+if (firstVisit) {
+  map.once('load', async () => {
+    const perm = await navigator.permissions?.query({ name: 'geolocation' }).catch(() => null);
+    if (perm?.state === 'granted') geolocate.trigger();
+  });
+}
+
 map.on('moveend', () => {
+  if (fixtureMode) return;
   localStorage.setItem('view', JSON.stringify({
     center: map.getCenter().toArray(),
     zoom: map.getZoom(),
@@ -53,7 +173,15 @@ map.on('moveend', () => {
 });
 
 // ---------- layers added once style is ready ----------
-map.on('load', () => {
+map.on('load', async () => {
+  map.addSource('gpx', { type: 'geojson', data: emptyFC() });
+  map.addLayer({
+    id: 'gpx-line', type: 'line', source: 'gpx',
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#a855f7', 'line-width': 5, 'line-opacity': 0.9 },
+  });
+
+  await trailsReady;
   // MapTiler Outdoor already ships hillshade + contours, so only add our own keyless
   // Terrarium DEM hillshade on the Liberty fallback (which has none).
   if (!USING_MAPTILER) {
@@ -103,67 +231,67 @@ map.on('load', () => {
     }, 'Water');
   }
 
-  // Empty sources we fill on demand.
-  map.addSource('trails', { type: 'geojson', data: emptyFC() });
+  // PMTiles supplies the production trails; the empty source keeps the shell usable offline.
+  map.addSource('trails', vectorTrails
+    ? { type: 'vector', url: `pmtiles://${vectorTrails}`, maxzoom: 16 }
+    : { type: 'geojson', data: emptyFC() });
 
-  // class:bicycle:mtb casings, drawn UNDER the trail line (added first) and wider so they
-  // peek out. Positive value (good for MTB) → bright yellow highlight; negative value
-  // (poor for MTB) → a faint translucent tan. mtbclass is a string; to-number("") → 0 so
-  // untagged/zero paths get neither.
-  map.addLayer({
-    id: 'trails-highlight',
-    type: 'line',
-    source: 'trails',
-    filter: ['>', ['to-number', ['get', 'mtbclass'], 0], 0],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': '#facc15',
-      'line-width': ['interpolate', ['linear'], ['zoom'], 11, 6, 16, 11],
-      'line-opacity': 0.9,
-      'line-blur': 0.5,
-    },
-  });
-  map.addLayer({
-    id: 'trails-fade',
-    type: 'line',
-    source: 'trails',
-    filter: ['<', ['to-number', ['get', 'mtbclass'], 0], 0],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': '#b08968',
-      'line-width': ['interpolate', ['linear'], ['zoom'], 11, 6, 16, 11],
-      'line-opacity': 0.45,
-      'line-blur': 1,
-    },
-  });
-
-  // The trail line, colored by mtb:scale. line-dasharray can't be data-driven, so the
-  // way TYPE (path vs track-by-grade vs bridleway vs cycleway) is split across one layer
-  // per dash pattern — like mtbmap.no's "Ways" legend — all sharing these expressions.
+  const trailSource = { source: 'trails', ...(vectorTrails && { 'source-layer': 'trails' }) };
+  // Draw trails under the base map's labels, like mtbmap.no, so place names stay readable.
+  const belowLabels = map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
   const TRAIL_COLOR = [
     'match', ['get', 'grade'],
     '0', '#22c55e',   // green
     '1', '#3b82f6',   // blue
     '2', '#ef4444',   // red
-    '3', '#111111',   // black
+    '3', '#4b5563',   // dark grey, so the black way pattern stays visible
     '4', '#facc15', '5', '#facc15', '6', '#facc15', // yellow base under black dashes
     /* fallback: untagged */ '#9ca3af',
   ];
-  const TRAIL_WIDTH = ['interpolate', ['linear'], ['zoom'], 11, 2, 16, 5];
-  // Fade lines poor for MTB (class:bicycle:mtb < 0) so they recede into the tan casing.
+  // Fade lines poor for MTB (class:bicycle:mtb < 0) so they recede.
   const TRAIL_OPACITY = ['case', ['<', ['to-number', ['get', 'mtbclass'], 0], 0], 0.4, 1];
 
-  // dash is a dasharray in line-width units, or null for a solid line. Dots use a round
-  // cap over a zero-length dash; dashes use a butt cap so they stay crisp.
-  const addTrailLine = (id, filter, dash, cap = 'butt') => {
-    const paint = { 'line-color': TRAIL_COLOR, 'line-width': TRAIL_WIDTH, 'line-opacity': TRAIL_OPACITY };
-    if (dash) paint['line-dasharray'] = dash;
-    map.addLayer({
-      id, type: 'line', source: 'trails', filter,
-      layout: { 'line-cap': cap, 'line-join': 'round' },
-      paint,
-    });
-  };
+  // Below z11 the archive only holds graded and named trails: draw them as thin solid
+  // difficulty lines that fade as you zoom out, like mtbmap.no's overview. The detailed
+  // styling takes over at z11.
+  map.addLayer({
+    id: 'trails-overview', type: 'line', ...trailSource, maxzoom: 11,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': TRAIL_COLOR,
+      'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.5, 8, 0.75, 11, 2],
+      'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, ['*', 0.5, TRAIL_OPACITY], 11, TRAIL_OPACITY],
+    },
+  }, belowLabels);
+
+  // From z11, mtbmap.no's look: a solid difficulty-coloured line with the way type drawn
+  // as a black pattern on top, and a thin class:bicycle:mtb halo underneath.
+  const BASE_WIDTH = ['interpolate', ['linear'], ['zoom'], 11, 3, 16, 8];
+  const HALO_WIDTH = ['interpolate', ['linear'], ['zoom'], 11, 7, 16, 15];
+  const PATTERN_WIDTH = ['interpolate', ['linear'], ['zoom'], 11, 1, 16, 2.5];
+  const addDetailLine = (id, filter, paint, cap = 'round') => map.addLayer({
+    id, type: 'line', ...trailSource, minzoom: 11, filter,
+    layout: { 'line-cap': cap, 'line-join': 'round' },
+    paint,
+  }, belowLabels);
+
+  // Yellow class:bicycle:mtb halo for ways good for MTB. mtbclass is a string; to-number("")
+  // → 0 so untagged/zero paths get none. Poor ones (< 0) just fade via TRAIL_OPACITY.
+  addDetailLine('trails-highlight', ['>', ['to-number', ['get', 'mtbclass'], 0], 0],
+    { 'line-color': '#facc15', 'line-width': HALO_WIDTH, 'line-opacity': 0.95 });
+  addDetailLine('trails-grade', ['!=', ['get', 'grade'], ''],
+    { 'line-color': TRAIL_COLOR, 'line-width': BASE_WIDTH, 'line-opacity': TRAIL_OPACITY });
+  // Black dashes over the yellow base → black-with-yellow-stripes for grade 4+.
+  addDetailLine('trails-line-hard', ['in', ['get', 'grade'], ['literal', ['4', '5', '6']]],
+    { 'line-color': '#111111', 'line-width': BASE_WIDTH, 'line-opacity': TRAIL_OPACITY, 'line-dasharray': [2, 2] }, 'butt');
+
+  // The way TYPE as a black pattern, like mtbmap.no's "Ways" legend. line-dasharray can't
+  // be data-driven, so each pattern is its own layer. dash is in line-width units, or null
+  // for solid; dots use a round cap over a zero-length dash, dashes a crisp butt cap.
+  const addTrailLine = (id, filter, dash, cap = 'butt') => addDetailLine(id, filter, {
+    'line-color': '#111111', 'line-width': PATTERN_WIDTH, 'line-opacity': TRAIL_OPACITY,
+    ...(dash && { 'line-dasharray': dash }),
+  }, cap);
 
   const isTrack = ['==', ['get', 'highway'], 'track'];
   const trackGrade = (g) => ['all', isTrack, ['==', ['get', 'tracktype'], g]];
@@ -179,335 +307,30 @@ map.on('load', () => {
   addTrailLine('trails-bridleway', ['==', ['get', 'highway'], 'bridleway'], [4, 2]);
   addTrailLine('trails-cycleway', ['==', ['get', 'highway'], 'cycleway'], null, 'round');
 
-  // Black dashes over the yellow base → black-with-yellow-stripes for grade 4+.
+  // Trail names along the line, like mtbmap.no: mtb:name first (riders' names such as
+  // "Bjørnars flyvende sidespor"), else name. Fonts come from the MapTiler style's glyphs.
+  // Archives built before mtbname existed lack it; coalesce keeps their name labels.
+  const mtbName = ['coalesce', ['get', 'mtbname'], ''];
   map.addLayer({
-    id: 'trails-line-hard',
-    type: 'line',
-    source: 'trails',
-    filter: ['in', ['get', 'grade'], ['literal', ['4', '5', '6']]],
-    layout: { 'line-cap': 'butt', 'line-join': 'round' },
-    paint: {
-      'line-width': ['interpolate', ['linear'], ['zoom'], 11, 2, 16, 5],
-      'line-color': '#111111',
-      'line-dasharray': [2, 2],
+    id: 'trails-label', type: 'symbol', ...trailSource, minzoom: 12,
+    filter: ['any', ['!=', mtbName, ''], ['!=', ['coalesce', ['get', 'name'], ''], '']],
+    layout: {
+      'symbol-placement': 'line',
+      'text-field': ['case', ['!=', mtbName, ''], mtbName, ['get', 'name']],
+      'text-font': ['Roboto Condensed Regular', 'Noto Sans Regular'],
+      'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10, 14, 12],
     },
-  });
+    paint: { 'text-color': '#1f2937', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
+  }, belowLabels);
 
-  map.addSource('gpx', { type: 'geojson', data: emptyFC() });
-  map.addLayer({
-    id: 'gpx-line', type: 'line', source: 'gpx',
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': '#a855f7', 'line-width': 5, 'line-opacity': 0.9 },
-  });
-
-  // Restore trail mode across reloads — cells come back from the SW cache offline.
-  $('trails').setAttribute('aria-pressed', String(trailsOn));
-  if (trailsOn) loadTrailCells();
-
-  status('Ready. 📍 to find yourself, 🚵 for trails.');
+  status(vectorTrails
+    ? 'Ready. Trails cover Norway only.'
+    : 'Trail data needs a connection.', !vectorTrails);
 });
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
-
 // ---------- Locate ----------
 $('locate').addEventListener('click', () => geolocate.trigger());
-
-// ---------- MTB trails via Overpass, on a fixed grid so URLs repeat & cache ----------
-// The old handler queried the exact viewport once: every pan made a new bbox URL
-// (never a cache hit) and never re-ran. Instead we snap queries to a fixed lat/lon
-// grid — the same cell yields a byte-identical Overpass URL every visit, so the
-// service worker's cache-first strategy hits (instant/offline revisits) — and we
-// auto-load cells as the map moves.
-const CELL = 0.05;             // grid cell size in degrees (~5.5 km of latitude)
-const TRAILS_MINZOOM = 11;     // below this a viewport spans too many cells
-const MAX_CELLS_PER_LOAD = 16; // guard against huge multi-cell fetches
-let trailsOn = localStorage.getItem('trailsOn') === '1';
-const loadedCells = new Set();   // "ix_iy" keys already fetched this session
-const trailFeatures = new Map(); // OSM way id -> feature (dedupe across cells)
-const cellFeatures = new Map();  // "ix_iy" -> Set<way id> that cell last returned
-
-const cellKey = (ix, iy) => `${ix}_${iy}`;
-
-// How long a cell's data is trusted before a background refresh. Geofabrik cuts the Norway
-// extract once a day, and the server polls hourly, so anything under ~24h would refetch data
-// that cannot have changed. See deploy/overpass/INFRA.md.
-const CELL_TTL_MS = 24 * 60 * 60 * 1000;
-const CELL_TS_KEY = 'cellFetchedAt';
-const CELL_TS_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // drop entries for cells long unvisited
-
-let cellFetchedAt = {};
-try {
-  const raw = JSON.parse(localStorage.getItem(CELL_TS_KEY) || '{}');
-  const cutoff = Date.now() - CELL_TS_MAX_AGE_MS;
-  for (const [k, t] of Object.entries(raw)) if (typeof t === 'number' && t > cutoff) cellFetchedAt[k] = t;
-} catch (e) {
-  cellFetchedAt = {}; // corrupt entry: treat every cell as stale rather than throwing
-}
-
-let cellTsTimer;
-function touchCell(key) {
-  cellFetchedAt[key] = Date.now();
-  // Debounced: a multi-cell load would otherwise serialise JSON once per cell.
-  clearTimeout(cellTsTimer);
-  cellTsTimer = setTimeout(() => {
-    try { localStorage.setItem(CELL_TS_KEY, JSON.stringify(cellFetchedAt)); } catch (e) { /* quota — freshness just falls back to per-session */ }
-  }, 500);
-}
-
-// Replace what one cell contributes, so a way deleted or retagged in OSM actually disappears.
-// Ways legitimately span cell boundaries, so an id is only dropped once NO cell still claims
-// it — deleting on absence from this one cell alone would erase trails that are still present
-// in the neighbour.
-function applyCellData(key, features) {
-  const previous = cellFeatures.get(key);
-  const current = new Set();
-  for (const f of features) {
-    trailFeatures.set(f.id, f);
-    current.add(f.id);
-  }
-  cellFeatures.set(key, current);
-  if (!previous) return;
-  for (const id of previous) {
-    if (current.has(id)) continue;
-    let claimedElsewhere = false;
-    for (const owned of cellFeatures.values()) {
-      if (owned.has(id)) { claimedElsewhere = true; break; }
-    }
-    if (!claimedElsewhere) trailFeatures.delete(id);
-  }
-}
-
-// All grid cells whose bbox intersects the current view.
-function cellsInView() {
-  const b = map.getBounds();
-  const ix0 = Math.floor(b.getWest() / CELL), ix1 = Math.floor(b.getEast() / CELL);
-  const iy0 = Math.floor(b.getSouth() / CELL), iy1 = Math.floor(b.getNorth() / CELL);
-  const cells = [];
-  for (let ix = ix0; ix <= ix1; ix++)
-    for (let iy = iy0; iy <= iy1; iy++) cells.push([ix, iy]);
-  return cells;
-}
-
-// Overpass query for one grid cell — bbox snapped to the grid at fixed precision,
-// so the resulting URL string is identical on every revisit.
-function cellQuery(ix, iy) {
-  const s = (iy * CELL).toFixed(4), w = (ix * CELL).toFixed(4);
-  const n = ((iy + 1) * CELL).toFixed(4), e = ((ix + 1) * CELL).toFixed(4);
-  return `[out:json][timeout:25];
-    (way["highway"~"^(path|track|bridleway|cycleway|footway)$"](${s},${w},${n},${e}););
-    out geom;`;
-}
-
-function renderTrails() {
-  const src = map.getSource('trails');
-  if (src) src.setData({ type: 'FeatureCollection', features: [...trailFeatures.values()] });
-}
-
-// Load every not-yet-loaded cell intersecting the view. Safe to call repeatedly.
-let loadToken = 0;
-async function loadTrailCells() {
-  if (!trailsOn) return;
-  if (map.getZoom() < TRAILS_MINZOOM) { status('Zoom in a bit to load trails.'); return; }
-  const pending = cellsInView().filter(([ix, iy]) => !loadedCells.has(cellKey(ix, iy)));
-  if (!pending.length) return;
-  if (pending.length > MAX_CELLS_PER_LOAD) { status('Zoom in a bit to load trails.'); return; }
-
-  const token = ++loadToken;
-  status('Loading trails…', true);
-  let failed = 0;
-  for (const [ix, iy] of pending) {
-    const key = cellKey(ix, iy);
-    loadedCells.add(key); // mark before awaiting so overlapping moveends don't double-fetch
-    try {
-      const data = await overpassQuery(cellQuery(ix, iy), endpointsFor(ix, iy));
-      applyCellData(key, overpassToGeoJSON(data).features);
-      touchCell(key);
-    } catch (err) {
-      loadedCells.delete(key); // let a later pan retry this cell
-      failed++;
-    }
-  }
-  if (token !== loadToken) return; // a newer load superseded this batch
-  renderTrails();
-  status(failed
-    ? `Trails loaded (${failed} cell(s) failed — pan to retry).`
-    : `${trailFeatures.size} trail segments loaded.`);
-  revalidateStaleCells(token);
-}
-
-// The service worker serves trail data cache-first and never expires it, which is what makes
-// revisits instant and offline-capable — but it also means an edit in OSM would never reach a
-// device that had already loaded that cell. So after painting from cache, quietly refetch any
-// cell whose data is older than CELL_TTL_MS and redraw if it actually changed.
-//
-// Deliberately silent: it does not touch the status line, because a background refresh should
-// never make the UI flicker or look like it's loading.
-async function revalidateStaleCells(token) {
-  if (!trailsOn || token !== loadToken) return;
-  if (map.getZoom() < TRAILS_MINZOOM) return;
-  const now = Date.now();
-  const stale = cellsInView().filter(([ix, iy]) => {
-    const key = cellKey(ix, iy);
-    return loadedCells.has(key) && now - (cellFetchedAt[key] || 0) > CELL_TTL_MS;
-  });
-  if (!stale.length) return;
-
-  let refreshed = false;
-  for (const [ix, iy] of stale) {
-    if (token !== loadToken) return; // a pan superseded us; drop the rest of the batch
-    const key = cellKey(ix, iy);
-    try {
-      const data = await overpassQuery(cellQuery(ix, iy), endpointsFor(ix, iy), { revalidate: true });
-      applyCellData(key, overpassToGeoJSON(data).features);
-      touchCell(key);
-      // No attempt to diff the response: a way's geometry or tags can change without the
-      // feature count moving, so any successful refresh triggers one redraw at the end.
-      // setData with identical data is visually a no-op, so this costs nothing when unchanged.
-      refreshed = true;
-    } catch (err) {
-      // Keep showing the cached view and leave the timestamp alone so we retry next pan.
-    }
-  }
-  if (refreshed && token === loadToken) renderTrails();
-}
-
-$('trails').addEventListener('click', (e) => {
-  const btn = e.currentTarget;
-  trailsOn = !trailsOn;
-  btn.setAttribute('aria-pressed', String(trailsOn));
-  localStorage.setItem('trailsOn', trailsOn ? '1' : '0');
-  if (trailsOn) {
-    loadTrailCells();
-  } else {
-    loadedCells.clear();
-    trailFeatures.clear();
-    cellFeatures.clear();
-    renderTrails();
-    status('Trails off.');
-  }
-});
-
-// Auto-load cells as the map moves (debounced) while trail mode is on.
-let trailMoveTimer;
-map.on('moveend', () => {
-  if (!trailsOn) return;
-  clearTimeout(trailMoveTimer);
-  trailMoveTimer = setTimeout(loadTrailCells, 400);
-});
-
-// Self-hosted Overpass (Norway), on a single Rocky Linux box — Caddy fronting the
-// wiktorn/overpass-api container; see deploy/rocky-linux/. Domain-agnostic: no domain is hardcoded.
-// By the deploy convention the site is served at mtb.<domain> and Overpass at
-// overpass.<domain>, so we DERIVE the endpoint from our own origin (first DNS label swapped
-// to "overpass"). Empty on an IP literal or a bare apex host — those fall back to the public
-// mirrors. Tried first for Norway cells; each request carries OVERPASS_TIMEOUT so a dead host
-// fails fast. sw.js derives the same host for offline cache-first. To force public-only,
-// hardcode this to ''.
-//
-// localhost is the one hardcoded case: it points at the container ./run-locally.sh starts.
-// Safe whether or not one is running — with nothing listening the request fails immediately
-// and the loop in overpassQuery() falls through to the mirrors, which is the same fallback
-// this returned '' for before. Deliberately NOT mirrored in sw.js, so dev responses stay
-// uncached and you always see what the local box actually returns.
-const SELF_HOSTED_OVERPASS = (() => {
-  const h = location.hostname;
-  // Port matches OVERPASS_PORT in run-locally.sh — change both together.
-  if (h === 'localhost') return 'http://localhost:12345/api/interpreter';
-  if (/^[0-9.]+$/.test(h)) return '';   // IP: no self-hosted box
-  const labels = h.split('.');
-  if (labels.length < 3) return '';   // need a subdomain to replace (e.g. mtb.example.com)
-  labels[0] = 'overpass';
-  return `https://${labels.join('.')}/api/interpreter`;
-})();
-
-// Public Overpass servers are community-run and often busy — try mirrors in turn.
-const PUBLIC_OVERPASS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-];
-
-// Rough mainland-Norway bbox (excludes Svalbard). Cells inside it go to the self-hosted
-// instance first; cells abroad use the public mirrors so travelling still shows trails.
-const NORWAY = { w: 4.0, s: 57.8, e: 31.5, n: 71.3 };
-function cellInNorway(ix, iy) {
-  const w = ix * CELL, s = iy * CELL, e = (ix + 1) * CELL, n = (iy + 1) * CELL;
-  return e > NORWAY.w && w < NORWAY.e && n > NORWAY.s && s < NORWAY.n;
-}
-function endpointsFor(ix, iy) {
-  return SELF_HOSTED_OVERPASS && cellInNorway(ix, iy)
-    ? [SELF_HOSTED_OVERPASS, ...PUBLIC_OVERPASS]
-    : PUBLIC_OVERPASS;
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// Overpass rate-limits by IP. Space requests out, and when we DO get a 429/504
-// honor Retry-After so we back off instead of hammering every mirror in turn.
-let overpassReadyAt = 0;               // don't send another request before this time
-const OVERPASS_MIN_GAP = 800;          // ms between requests (gentle on the servers)
-// Per-request timeout for the SELF-HOSTED endpoint ONLY: a dead/slow box must fail fast so we
-// fall through to the public mirrors instead of stalling on the browser's long default. Public
-// mirrors are left untimed on purpose — a valid large-bbox query there can legitimately take
-// longer, and aborting it would exhaust the fallback chain. Feature-detected: on a browser
-// without AbortSignal.timeout we just skip it (plain fetch) rather than throwing every request.
-const OVERPASS_TIMEOUT = 8000;         // ms
-const HAS_ABORT_TIMEOUT = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function';
-function overpassFetch(url, ep) {
-  return ep === SELF_HOSTED_OVERPASS && HAS_ABORT_TIMEOUT
-    ? fetch(url, { signal: AbortSignal.timeout(OVERPASS_TIMEOUT) })
-    : fetch(url);
-}
-async function overpassQuery(query, endpoints = PUBLIC_OVERPASS, { revalidate = false } = {}) {
-  // GET (not POST) so the service worker can cache the response by URL —
-  // that's what makes a previously-loaded area's trails work offline.
-  //
-  // `revalidate` appends a marker the service worker acts on and then strips, so the request
-  // goes to the network and overwrites the existing cache entry instead of reading it. The
-  // marker never reaches Overpass. See revalidate() in sw.js.
-  const qs = '?data=' + encodeURIComponent(query) + (revalidate ? '&_rv=1' : '');
-  let lastErr;
-  for (const ep of endpoints) {
-    const wait = overpassReadyAt - Date.now();
-    if (wait > 0) await sleep(wait);
-    try {
-      const res = await overpassFetch(ep + qs, ep);
-      if (res.status === 429 || res.status === 504) {
-        // Rate-limited / overloaded — back off before the next request anywhere.
-        const ra = parseInt(res.headers.get('Retry-After') || '', 10);
-        const backoff = Math.min((Number.isNaN(ra) ? 5 : ra) * 1000, 15000);
-        overpassReadyAt = Date.now() + backoff;
-        lastErr = new Error(res.status + ' from ' + new URL(ep).hostname);
-        continue;
-      }
-      if (!res.ok) { lastErr = new Error(res.status + ' from ' + new URL(ep).hostname); continue; }
-      overpassReadyAt = Date.now() + OVERPASS_MIN_GAP;
-      return await res.json();
-    } catch (e) { lastErr = e; }
-  }
-  throw lastErr || new Error('all mirrors unavailable');
-}
-
-function overpassToGeoJSON(data) {
-  const features = [];
-  for (const el of data.elements || []) {
-    if (el.type !== 'way' || !el.geometry) continue;
-    features.push({
-      type: 'Feature',
-      id: el.id, // OSM way id — used to dedupe ways that span multiple grid cells
-      properties: {
-        grade: (el.tags && el.tags['mtb:scale']) ?? '',
-        mtbclass: (el.tags && el.tags['class:bicycle:mtb']) ?? '',
-        tracktype: (el.tags && el.tags.tracktype) ?? '',
-        name: (el.tags && el.tags.name) || '',
-        highway: (el.tags && el.tags.highway) || '',
-      },
-      geometry: {
-        type: 'LineString',
-        coordinates: el.geometry.map((p) => [p.lon, p.lat]),
-      },
-    });
-  }
-  return { type: 'FeatureCollection', features };
-}
 
 // ---------- GPX overlay ----------
 $('gpx').addEventListener('change', async (e) => {
