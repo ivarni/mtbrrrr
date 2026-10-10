@@ -3,10 +3,21 @@ local retained = { path = true, track = true, bridleway = true, cycleway = true,
 -- MTB route relations name trails whose ways carry no name (e.g. "Pionéren"). Race courses
 -- ("Terrengsykkelrittet 2016", state=temporary cups) overlap real trails and change every few
 -- ways, which makes labels too long to fit and stops ways merging, so they are skipped.
+local function trail_route()
+  return Find("type") == "route" and Find("route") == "mtb" and Find("name") ~= ""
+    and Find("state") ~= "temporary" and not Find("name"):match("%d%d%d%d")
+end
+
 function relation_scan_function()
-  if Find("type") ~= "route" or Find("route") ~= "mtb" then return end
-  if Find("state") == "temporary" or Find("name"):match("%d%d%d%d") then return end
-  Accept()
+  if trail_route() then Accept() end
+end
+
+-- The route's own label line: tilemaker joins the member ways end to end whichever way each
+-- is drawn, so the name follows the whole route instead of each way's short piece.
+function relation_function()
+  if not trail_route() then return end
+  Layer("labels", false)
+  Attribute("route", Find("name"))
 end
 
 -- Every MTB route the way is on, sorted and joined: a trail that is also on an old
@@ -47,4 +58,12 @@ function way_function()
   Attribute("tracktype", Find("tracktype"), 11)
   -- Graded and named ways form the z6-10 overview; the rest join at z13.
   MinZoom((name ~= "" or mtbname ~= "" or routename ~= "" or grade ~= "" or mtbclass ~= "") and 6 or 13)
+
+  -- Names only, so a trail's ways merge into long label lines however grade or class change
+  -- along it. The app shows these in place of the trails layer's names.
+  local own = mtbname ~= "" and mtbname or name
+  if own ~= "" then
+    Layer("labels", false)
+    Attribute("name", own)
+  end
 end

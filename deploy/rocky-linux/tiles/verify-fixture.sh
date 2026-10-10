@@ -29,8 +29,8 @@ import gzip
 import os
 from mapbox_vector_tile import decode
 required = {"name", "mtbname", "routename", "grade", "mtbclass", "highway", "tracktype"}
-def features(name):
- return decode(gzip.decompress(open(f"/data/{name}.mvt", "rb").read())).get("trails", {"features": []})["features"]
+def features(name, layer="trails"):
+ return decode(gzip.decompress(open(f"/data/{name}.mvt", "rb").read())).get(layer, {"features": []})["features"]
 z6, z11, z13, z16 = (features(os.environ[name]) for name in ("Z6", "Z11", "Z13", "Z16"))
 left, right = (features(os.environ[name]) for name in ("LEFT", "RIGHT"))
 assert z6 and z11 and z13 and z16
@@ -41,9 +41,16 @@ assert {(f["properties"]["grade"], f["properties"]["mtbclass"]) for f in z6} == 
 assert all(required <= f["properties"].keys() and "osm_id" not in f["properties"] for f in z11 + z13 + z16)
 assert "Boundary path" in {f["properties"]["name"] for f in z11}
 assert all(f["properties"]["name"] or f["properties"]["mtbname"] or f["properties"]["routename"] or f["properties"]["grade"] or f["properties"]["mtbclass"] for f in z11)
-# 108 and 109 touch with equal tags: one line long enough for a label, not a multiline.
+# 108 and 109 touch with equal tags and merge; 110 continues them with another grade.
 merged = [f for f in z11 if f["properties"]["mtbname"] == "MTB-only name"]
-assert len(merged) == 1 and merged[0]["geometry"]["type"] == "LineString", merged
+assert len(merged) == 2 and all(f["geometry"]["type"] == "LineString" for f in merged), merged
+# The labels layer holds names only, so 108-110 make one label line despite the grade change.
+labels = features(os.environ["Z11"], "labels")
+named = [f for f in labels if f["properties"].get("name") == "MTB-only name"]
+assert len(named) == 1 and named[0]["geometry"]["type"] == "LineString", named
+# Route labels come from the relations themselves: races (204, 205) and hiking (203) are skipped.
+assert {f["properties"]["route"] for f in labels if "route" in f["properties"]} == {"Pionéren", "Big race"}, labels
+assert not features(os.environ["Z16"], "labels")
 # MTB route names: shared ways list every route, sorted; other route types and race
 # courses (year in the name, state=temporary: 204, 205 on way 102) are ignored.
 routes = {f["properties"]["routename"] for f in z11 + z13}
