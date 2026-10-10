@@ -255,6 +255,10 @@ map.once('style.load', async () => {
     : { type: 'geojson', data: emptyFC() });
 
   const trailSource = { source: 'trails', ...(vectorTrails && { 'source-layer': 'trails' }) };
+  // Labels read the z13 tiles at every zoom (overzoomed): below z14 the tiles join touching
+  // ways into long lines, while from z14 each way is a short piece most names don't fit on.
+  if (vectorTrails) map.addSource('trail-labels', { type: 'vector', url: `pmtiles://${vectorTrails}`, maxzoom: 13 });
+  const labelSource = vectorTrails ? { source: 'trail-labels', 'source-layer': 'trails' } : trailSource;
   // Draw trails above every base line/fill (water, paths, routes, lifts) but under the labels,
   // like mtbmap.no, so place names stay readable. MapTiler puts contour labels early, so anchor
   // on the first symbol layer after the last non-border line layer, not the first symbol overall;
@@ -331,20 +335,33 @@ map.once('style.load', async () => {
   addTrailLine('trails-cycleway', ['==', ['get', 'highway'], 'cycleway'], null, 'round');
 
   // Trail names along the line, like mtbmap.no: mtb:name first (riders' names such as
-  // "Bjørnars flyvende sidespor"), else name. Fonts come from the MapTiler style's glyphs.
-  // Archives built before mtbname existed lack it; coalesce keeps their name labels.
-  const mtbName = ['coalesce', ['get', 'mtbname'], ''];
+  // "Bjørnars flyvende sidespor"), else name, plus the MTB route relations it is on.
+  // Archives built before mtbname/routename existed lack them; coalesce keeps older labels.
+  // Names reach tiles from z11. The layer goes on top so base-map labels don't crowd out
+  // trail names; Noto Sans Bold exists in both MapTiler and OpenFreeMap glyphs.
+  const prop = (k) => ['coalesce', ['get', k], ''];
+  const own = ['case', ['!=', prop('mtbname'), ''], prop('mtbname'), prop('name')];
+  // A named section of a route shows both, e.g. "Bukkene bruse / Pionéren".
+  const label = ['case',
+    ['any', ['==', own, ''], ['==', own, prop('routename')]], prop('routename'),
+    ['==', prop('routename'), ''], own,
+    ['concat', own, ' / ', prop('routename')]];
   map.addLayer({
-    id: 'trails-label', type: 'symbol', ...trailSource, minzoom: 12,
-    filter: ['any', ['!=', mtbName, ''], ['!=', ['coalesce', ['get', 'name'], ''], '']],
+    id: 'trails-label', type: 'symbol', ...labelSource, minzoom: 11,
+    filter: ['!=', label, ''],
     layout: {
       'symbol-placement': 'line',
-      'text-field': ['case', ['!=', mtbName, ''], mtbName, ['get', 'name']],
-      'text-font': ['Roboto Condensed Regular', 'Noto Sans Regular'],
-      'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10, 14, 12],
+      // Trails run close together; overlapping names beat names that vanish.
+      'text-allow-overlap': true,
+      'symbol-spacing': 200,
+      // Trails wind; the default 45° drops most labels on bendy segments.
+      'text-max-angle': 70,
+      'text-field': label,
+      'text-font': ['Noto Sans Bold'],
+      'text-size': ['interpolate', ['linear'], ['zoom'], 11, 11, 14, 13, 16, 15],
     },
-    paint: { 'text-color': '#1f2937', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
-  }, belowLabels);
+    paint: { 'text-color': '#111827', 'text-halo-color': '#ffffff', 'text-halo-width': 2 },
+  });
 
   status(vectorTrails
     ? 'Ready. Trails cover Norway only.'

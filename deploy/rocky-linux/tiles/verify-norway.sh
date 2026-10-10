@@ -24,7 +24,7 @@ docker run --rm -v "$tmp:/data" python:3.13-slim sh -ceu '
   python - <<"PY"
 import gzip, json, os
 from mapbox_vector_tile import decode
-required = ("osm_id", "name", "mtbname", "grade", "mtbclass", "highway", "tracktype")
+required = ("name", "mtbname", "grade", "mtbclass", "highway", "tracktype")
 overview = decode(gzip.decompress(open("/data/6.mvt", "rb").read()))["trails"]["features"]
 assert overview and all(f["properties"].keys() == {"grade", "mtbclass"} for f in overview)
 print(f"z6 overview: {len(overview)} features, {os.path.getsize("/data/6.mvt")} bytes")
@@ -32,7 +32,7 @@ samples = []
 for z in (11, 13, 16):
  features = decode(gzip.decompress(open(f"/data/{z}.mvt", "rb").read()))["trails"]["features"]
  feature = next(f for f in features if set(required) <= f["properties"].keys())
- samples.append({"z": z, "properties": feature["properties"], "tile_bytes": os.path.getsize(f"/data/{z}.mvt")})
+ samples.append({"z": z, "id": feature["id"], "properties": feature["properties"], "tile_bytes": os.path.getsize(f"/data/{z}.mvt")})
 open("/data/samples.json", "w").write(json.dumps(samples))
 PY
 '
@@ -42,7 +42,7 @@ docker run --rm -v "$tiles:/data:ro" -v "$tmp:/out" debian@sha256:3783cc01769c7b
 import json
 import subprocess
 for sample in json.load(open("/out/samples.json")):
- way = sample["properties"]["osm_id"].split("/")[1]
+ way = sample["id"]
  subprocess.run(["osmium", "getid", "/data/norway-latest.osm.pbf", f"w{way}", "-o", f"/out/{way}.osm"], check=True)
 PY
 '
@@ -52,10 +52,10 @@ import xml.etree.ElementTree as ET
 samples = json.load(open('/data/samples.json'))
 for sample in samples:
  props = sample['properties']
- way = props['osm_id'].split('/')[1]
+ way = sample['id']
  tags = {tag.attrib['k']: tag.attrib['v'] for tag in ET.parse(f'/data/{way}.osm').findall('.//tag')}
  expected = {'name': tags.get('name', ''), 'mtbname': tags.get('mtb:name', ''), 'grade': tags.get('mtb:scale', ''), 'mtbclass': tags.get('class:bicycle:mtb', ''), 'highway': tags['highway'], 'tracktype': tags.get('tracktype', '')}
  assert {key: props[key] for key in expected} == expected, (sample['z'], props, expected)
- print(f"z{sample['z']} {props['osm_id']}: properties match PBF")
+ print(f"z{sample['z']} way {way}: properties match PBF")
 print(f"largest sampled tile: {max(sample['tile_bytes'] for sample in samples)} bytes")
 PY

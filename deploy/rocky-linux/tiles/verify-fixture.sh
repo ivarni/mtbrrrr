@@ -28,7 +28,7 @@ docker run --rm -v "$tmp:/data:ro" \
 import gzip
 import os
 from mapbox_vector_tile import decode
-required = {"osm_id", "name", "mtbname", "grade", "mtbclass", "highway", "tracktype"}
+required = {"name", "mtbname", "routename", "grade", "mtbclass", "highway", "tracktype"}
 def features(name):
  return decode(gzip.decompress(open(f"/data/{name}.mvt", "rb").read())).get("trails", {"features": []})["features"]
 z6, z11, z13, z16 = (features(os.environ[name]) for name in ("Z6", "Z11", "Z13", "Z16"))
@@ -37,14 +37,22 @@ assert z6 and z11 and z13 and z16
 # Overview: only grade and mtbclass survive, so graded (101, 104) and named (106, 108) ways merge by class.
 assert all(f["properties"].keys() == {"grade", "mtbclass"} for f in z6)
 assert {(f["properties"]["grade"], f["properties"]["mtbclass"]) for f in z6} == {("1", ""), ("", "2"), ("", "")}
-assert all(required <= f["properties"].keys() for f in z11 + z13 + z16)
-assert "osm:way/106" in {f["properties"]["osm_id"] for f in z11}
-assert all(f["properties"]["name"] or f["properties"]["mtbname"] or f["properties"]["grade"] or f["properties"]["mtbclass"] for f in z11)
-assert {f["properties"]["osm_id"]: f["properties"]["mtbname"] for f in z11}.get("osm:way/108") == "MTB-only name"
+# Below z14 touching ways with equal tags merge; from z14 there is one feature per way. The way ID is the feature id.
+assert all(required <= f["properties"].keys() and "osm_id" not in f["properties"] for f in z11 + z13 + z16)
+assert "Boundary path" in {f["properties"]["name"] for f in z11}
+assert all(f["properties"]["name"] or f["properties"]["mtbname"] or f["properties"]["routename"] or f["properties"]["grade"] or f["properties"]["mtbclass"] for f in z11)
+# 108 and 109 touch with equal tags: one line long enough for a label, not a multiline.
+merged = [f for f in z11 if f["properties"]["mtbname"] == "MTB-only name"]
+assert len(merged) == 1 and merged[0]["geometry"]["type"] == "LineString", merged
+# MTB route names: shared ways list every route, sorted; other route types and race
+# courses (year in the name, state=temporary: 204, 205 on way 102) are ignored.
+routes = {f["properties"]["routename"] for f in z11 + z13}
+assert {"Big race / Pionéren", "Big race"} <= routes, routes
+assert "Hiking only" not in routes, routes
 assert {"path", "track", "bridleway", "cycleway", "footway"} <= {f["properties"]["highway"] for f in z13}
-assert len({f["properties"]["osm_id"] for f in z16}) == len(z16)
-assert "osm:way/106" in {f["properties"]["osm_id"] for f in left}
-assert "osm:way/106" in {f["properties"]["osm_id"] for f in right}
+assert len({f["id"] for f in z16}) == len(z16)
+assert 106 in {f["id"] for f in left}
+assert 106 in {f["id"] for f in right}
 print(f"z6={len(z6)} z11={len(z11)} z13={len(z13)} z16={len(z16)}: schema, zoom rules, and boundary ID ok")
 PY
 '
