@@ -363,6 +363,55 @@ map.once('style.load', async () => {
     paint: { 'text-color': '#111827', 'text-halo-color': '#ffffff', 'text-halo-width': 2 },
   });
 
+  // ---------- select a trail ----------
+  // A trail is a name: the way's own name or one of its MTB routes. Tapping a way lists
+  // every trail on it (a popup when there are several) and outlines all ways of the chosen one.
+  // ponytail: same-named trails elsewhere in view light up too; match on relation IDs if that bites.
+  const routes = ['concat', ' / ', prop('routename'), ' / '];
+  const trailFilter = (name) => ['any', ['==', own, name], ['in', ` / ${name} / `, routes]];
+  map.addLayer({
+    id: 'trails-selected', type: 'line', ...trailSource, minzoom: 11,
+    layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
+    paint: { 'line-color': '#ff2d95', 'line-opacity': 0.8, 'line-width': ['interpolate', ['linear'], ['zoom'], 11, 10, 16, 22] },
+  }, 'trails-highlight');
+  // Other trails and their names fade to a quarter while one is selected.
+  const dimmed = map.getStyle().layers
+    .filter(({ id }) => id.startsWith('trails-') && !['trails-selected', 'trails-overview'].includes(id))
+    .map(({ id, type }) => {
+      const opacity = type === 'symbol' ? 'text-opacity' : 'line-opacity';
+      return { id, opacity, base: map.getPaintProperty(id, opacity) ?? 1 };
+    });
+  const select = (name) => {
+    for (const { id, opacity, base } of dimmed) {
+      map.setPaintProperty(id, opacity, name ? ['case', trailFilter(name), base, ['*', 0.25, base]] : base);
+    }
+    if (name) map.setFilter('trails-selected', trailFilter(name));
+    map.setLayoutProperty('trails-selected', 'visibility', name ? 'visible' : 'none');
+  };
+  let picker;
+  map.on('click', ({ point, lngLat }) => {
+    picker?.remove();
+    const r = 10; // finger-sized hit area
+    const hits = map.queryRenderedFeatures([[point.x - r, point.y - r], [point.x + r, point.y + r]])
+      .filter((f) => f.source === 'trails' || f.source === 'trail-labels');
+    const names = new Set();
+    for (const { properties: p } of hits) {
+      const name = p.mtbname || p.name;
+      if (name) names.add(name);
+      for (const route of (p.routename || '').split(' / ')) if (route) names.add(route);
+    }
+    if (names.size <= 1) return select([...names][0]);
+    const list = document.createElement('div');
+    list.className = 'trail-picker';
+    for (const name of [...names].sort()) {
+      list.append(Object.assign(document.createElement('button'), {
+        textContent: name, // OSM text: never innerHTML
+        onclick: () => { select(name); picker.remove(); },
+      }));
+    }
+    picker = new maplibregl.Popup({ maxWidth: '260px' }).setLngLat(lngLat).setDOMContent(list).addTo(map);
+  });
+
   status(vectorTrails
     ? 'Ready. Trails cover Norway only.'
     : 'Trail data needs a connection.', !vectorTrails);
