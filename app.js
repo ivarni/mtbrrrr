@@ -346,7 +346,8 @@ map.once('style.load', async () => {
     'symbol-spacing': 200,
     // Trails wind; MapLibre sums the turns under each ~3/5-glyph stretch of a label and drops
     // it past this. Higher values let letters pile up on bends. The tiles smooth label lines
-    // by 15 m at z13 (doubling per zoom out) so most labels pass; small text at z11-14 helps too.
+    // by 20 m at z13 (doubling per zoom out) so most labels pass; 15 m left too many zigzags
+    // for z13-14. Small text at z11-14 helps too.
     'text-max-angle': 70,
     'text-font': ['Noto Sans Bold'],
     'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10, 14, 11, 15, 13, 16, 15],
@@ -360,11 +361,15 @@ map.once('style.load', async () => {
     layout: { ...labelLayout, 'text-field': ['get', 'route'] },
     paint: { ...labelPaint, 'text-color': '#14532d' },
   });
+  // A named section of a route shows both as one label, e.g. "Bukkene bruse / Pionéren".
+  const sectionLabel = ['case',
+    ['any', ['==', prop('routename'), ''], ['==', prop('routename'), own]], own,
+    ['concat', own, ' / ', prop('routename')]];
   map.addLayer({
     id: 'trails-label', type: 'symbol', ...labelSource, minzoom: 11,
     filter: ['has', 'name'],
     // Trails run close together; overlapping names beat names that vanish.
-    layout: { ...labelLayout, 'text-field': ['get', 'name'], 'text-allow-overlap': true },
+    layout: { ...labelLayout, 'text-field': sectionLabel, 'text-allow-overlap': true },
     paint: labelPaint,
   });
 

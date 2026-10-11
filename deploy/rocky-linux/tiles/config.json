@@ -1,7 +1,7 @@
 {
   "layers": {
     "trails": { "minzoom": 6, "maxzoom": 16, "combine_lines_below": 14, "simplify_below": 11, "simplify_level": 0.0005, "simplify_ratio": 2 },
-    "labels": { "minzoom": 11, "maxzoom": 13, "combine_lines_below": 14, "simplify_below": 14, "simplify_length": 0.015 }
+    "labels": { "minzoom": 11, "maxzoom": 13, "combine_lines_below": 14, "simplify_below": 14, "simplify_length": 0.02 }
   },
   "settings": {
     "minzoom": 6,

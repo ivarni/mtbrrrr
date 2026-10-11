@@ -60,10 +60,12 @@ function way_function()
   MinZoom((name ~= "" or mtbname ~= "" or routename ~= "" or grade ~= "" or mtbclass ~= "") and 6 or 13)
 
   -- Names only, so a trail's ways merge into long label lines however grade or class change
-  -- along it. The app shows these in place of the trails layer's names.
+  -- along it. The app shows these in place of the trails layer's names. The routes come along
+  -- so a named section of one reads "Bukkene bruse / Pionéren" as a single label.
   local own = mtbname ~= "" and mtbname or name
   if own ~= "" then
     Layer("labels", false)
     Attribute("name", own)
+    Attribute("routename", routename)
   end
 end

@@ -48,6 +48,7 @@ assert len(merged) == 2 and all(f["geometry"]["type"] == "LineString" for f in m
 labels = features(os.environ["Z11"], "labels")
 named = [f for f in labels if f["properties"].get("name") == "MTB-only name"]
 assert len(named) == 1 and named[0]["geometry"]["type"] == "LineString", named
+assert named[0]["properties"]["routename"] == "Big race", named
 # Route labels come from the relations themselves: races (204, 205) and hiking (203) are skipped.
 assert {f["properties"]["route"] for f in labels if "route" in f["properties"]} == {"Pionéren", "Big race"}, labels
 assert not features(os.environ["Z16"], "labels")
