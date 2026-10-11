@@ -34,9 +34,10 @@ def features(name, layer="trails"):
 z6, z11, z13, z16 = (features(os.environ[name]) for name in ("Z6", "Z11", "Z13", "Z16"))
 left, right = (features(os.environ[name]) for name in ("LEFT", "RIGHT"))
 assert z6 and z11 and z13 and z16
-# Overview: only grade and mtbclass survive, so graded (101, 104) and named (106, 108) ways merge by class.
+# Overview: only grade and mtbclass survive, so graded (101, 104, 110) and named (106, 108) ways merge by class.
 assert all(f["properties"].keys() == {"grade", "mtbclass"} for f in z6)
-assert {(f["properties"]["grade"], f["properties"]["mtbclass"]) for f in z6} == {("1", ""), ("", "2"), ("", "")}
+overview = {(f["properties"]["grade"], f["properties"]["mtbclass"]) for f in z6}
+assert overview == {("1", ""), ("2", ""), ("", "2"), ("", "")}, overview
 # Below z14 touching ways with equal tags merge; from z14 there is one feature per way. The way ID is the feature id.
 assert all(required <= f["properties"].keys() and "osm_id" not in f["properties"] for f in z11 + z13 + z16)
 assert "Boundary path" in {f["properties"]["name"] for f in z11}
@@ -96,6 +97,13 @@ for e in sum(entries.values(), []):
  if e['name'] == 'MTB-only name':
   ends = [r[0] for r in runs[1:]] + [profile[-1][0]]
   assert [round(end - start) for (start, g), end in zip(runs, ends) if g == '2'] in ([round(length('110'))], [round(length('110')) + 1], [round(length('110')) - 1]), runs
+ assert len(data['line']) == 64, e
+ # Direction: way 110 is oneway against its drawing (north to south), so the whole chain runs
+ # south; untagged ways climb from their lower end, which on the synthetic slope is the south.
+ if e['name'] in ('MTB-only name', 'Big race'):
+  assert data['line'][0][1] > data['line'][-1][1], (e, data['line'])
+ if e['name'] == 'Named path':
+  assert data['line'][0][1] < data['line'][-1][1] and profile[0][1] <= profile[-1][1], (e, data['line'])
  assert len(profile) == 64 and profile[0][0] == 0 and profile[-1][0] <= e['length_m'] + 1, (e, profile)
  assert abs((e['ascent_m'] - e['descent_m']) - (profile[-1][1] - profile[0][1])) <= 2, (e, profile)
 print(f'search: {len(sum(entries.values(), []))} entries, bbox, length, grades and profiles ok')

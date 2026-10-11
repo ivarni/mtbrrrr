@@ -1,7 +1,9 @@
 """Trail search index: search.json and profiles/<id>.json from OSM trails and DTM10 GeoTIFFs.
 
-A profile is {"elevation": [[distance_m, elevation_m], ...64], "grades": [[from_m, mtb:scale], ...]}
-along the trail's longest chain; a grade run lasts until the next one starts ("" = ungraded).
+A profile is {"elevation": [[distance_m, elevation_m], ...64], "line": [[lon, lat], ...64],
+"grades": [[from_m, mtb:scale], ...]} along the trail's longest chain; a grade run lasts until the
+next one starts ("" = ungraded). The chain runs in the trail's direction: oneway tags, else the
+route's member order, else incline (riding down), else from its lower end.
 
 usage: build-search.py <trails.osm.pbf> <out-dir> <dem-dir>
 
@@ -46,17 +48,27 @@ def seg_lengths(xy):
 
 
 class Way:
-    __slots__ = ('id', 'a', 'b', 'xy', 'length', 'scale', 'mtbclass')
+    __slots__ = ('id', 'a', 'b', 'xy', 'length', 'scale', 'mtbclass', 'oneway', 'incline')
+
+
+def drawn_direction(tags):
+    """(oneway, incline): +1 along the way as drawn, -1 against it, 0 unknown. incline points downhill."""
+    oneway = tags.get('oneway:bicycle') or tags.get('oneway', '')
+    oneway = 1 if oneway in ('yes', 'true', '1') else -1 if oneway in ('-1', 'reverse') else 0
+    incline = tags.get('incline', '')
+    sign = -1 if incline == 'up' or re.match(r'\+?\d', incline) else 1 if incline == 'down' or incline.startswith('-') else 0
+    return oneway, sign
 
 
 def read_ways(path):
-    routes = defaultdict(list)
+    routes, order = defaultdict(list), defaultdict(dict)
     for r in osmium.FileProcessor(path, osmium.osm.RELATION):
         tags = dict(r.tags)
         if trail_route(tags):
-            for m in r.members:
+            for i, m in enumerate(r.members):
                 if m.type == 'w':
                     routes[m.ref].append(tags['name'])
+                    order[tags['name']].setdefault(m.ref, i)
 
     ways, by_name = {}, defaultdict(list)
     for w in (osmium.FileProcessor(path, osmium.osm.NODE | osmium.osm.WAY)
@@ -75,10 +87,11 @@ def read_ways(path):
         way.xy = np.frombuffer(coords).reshape(-1, 2)
         way.length = float(seg_lengths(way.xy).sum())
         way.scale, way.mtbclass = tags.get('mtb:scale', ''), tags.get('class:bicycle:mtb', '')
+        way.oneway, way.incline = drawn_direction(tags)
         ways[w.id] = way
         for name in names:
             by_name[name].append(way)
-    return by_name
+    return by_name, order
 
 
 def clusters(ways):
@@ -107,7 +120,7 @@ def clusters(ways):
 
 def chain(ways):
     """The longest end-to-end run of ways (farthest endpoint from anywhere, then farthest from it),
-    as (points, grade runs).
+    as (points, grade runs, [(way, reversed)]).
     ponytail: ways meeting mid-way (not at endpoints) don't connect; join properly if profiles look silly."""
     edges = defaultdict(list)
     for w in ways:
@@ -150,7 +163,17 @@ def chain(ways):
         if not runs or runs[-1][1] != w.scale:
             runs.append([round(at), w.scale])
         at += w.length
-    return np.concatenate([parts[0]] + [p[1:] for p in parts[1:]]), runs
+    return np.concatenate([parts[0]] + [p[1:] for p in parts[1:]]), runs, best
+
+
+def direction(best, order):
+    """+1 to keep the chain's direction, -1 to turn it, 0 when the tags don't say."""
+    oneway = sum(w.length * w.oneway * (-1 if rev else 1) for w, rev in best)
+    idx = [order[w.id] for w, _ in best if w.id in order]
+    route = sum((b > a) - (b < a) for a, b in zip(idx, idx[1:]))
+    incline = sum(w.length * w.incline * (-1 if rev else 1) for w, rev in best)
+    score = oneway or route or incline
+    return (score > 0) - (score < 0)
 
 
 def along(xy):
@@ -194,7 +217,8 @@ def main(pbf, out_dir, dem_dir):
     out = Path(out_dir)
     (out / 'profiles').mkdir(parents=True, exist_ok=True)
     entries, lines = [], []
-    for name, ways in read_ways(pbf).items():
+    by_name, order = read_ways(pbf)
+    for name, ways in by_name.items():
         for group in clusters(ways):
             xy = np.concatenate([w.xy for w in group])
             grades = {}
@@ -214,12 +238,12 @@ def main(pbf, out_dir, dem_dir):
                 'length_m': round(sum(w.length for w in group)),
                 'grades': grades,
             })
-            xy, runs = chain(group)
-            lines.append((*along(xy), runs))
+            xy, runs, best = chain(group)
+            lines.append((*along(xy), runs, direction(best, order.get(name, {}))))
 
-    elev = elevations(dem_dir, np.concatenate([p for _, p, _ in lines]))
+    elev = elevations(dem_dir, np.concatenate([line[1] for line in lines]))
     start = 0
-    for entry, (d, p, runs) in zip(entries, lines):
+    for entry, (d, p, runs, heading) in zip(entries, lines):
         e = elev[start:start + len(p)]
         start += len(p)
         ok = ~np.isnan(e)
@@ -227,12 +251,17 @@ def main(pbf, out_dir, dem_dir):
             entry['ascent_m'] = entry['descent_m'] = None
             continue
         e = np.interp(d, d[ok], e[ok])
+        if (heading or (1 if e[0] <= e[-1] else -1)) < 0:  # no tag says: climb from the lower end
+            ends = [r[0] for r in runs[1:]] + [d[-1]]
+            runs = [[round(d[-1] - end), g] for (_, g), end in zip(runs, ends)][::-1]
+            d, p, e = d[-1] - d[::-1], p[::-1], e[::-1]
         diff = np.diff(e)
         entry['ascent_m'], entry['descent_m'] = round(diff[diff > 0].sum()), round(-diff[diff < 0].sum())
         at = np.linspace(0, d[-1], SAMPLES)
         profile = [[round(x), round(y)] for x, y in zip(at, np.interp(at, d, e))]
+        line = [[round(x, 5), round(y, 5)] for x, y in zip(np.interp(at, d, p[:, 0]), np.interp(at, d, p[:, 1]))]
         (out / 'profiles' / f"{entry['id']}.json").write_text(
-            json.dumps({'elevation': profile, 'grades': runs}, separators=(',', ':')))
+            json.dumps({'elevation': profile, 'line': line, 'grades': runs}, separators=(',', ':')))
 
     entries.sort(key=lambda e: (e['name'].casefold(), -e['length_m']))
     (out / 'search.json').write_text(json.dumps(entries, ensure_ascii=False, separators=(',', ':')))

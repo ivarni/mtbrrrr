@@ -55,6 +55,7 @@ const saved = fixtureMode
   : JSON.parse(localStorage.getItem('view') || 'null');
 const NORWAY = [[4.5, 57.9], [31.2, 71.2]];
 const firstVisit = !saved && !location.hash; // read now: the map writes a hash as soon as it exists
+const linkedView = !!location.hash; // a shared link's view: keep it when restoring its trail
 
 // ---------- base map ----------
 // MapTiler Outdoor gives topo cartography (contours + hillshade + terrain) close to
@@ -434,6 +435,7 @@ map.once('style.load', async () => {
     map.setLayoutProperty('trails-selected', 'visibility', filter ? 'visible' : 'none');
   };
   selectTrail = select;
+  layersReady();
   let picker;
   map.on('click', ({ point, lngLat }) => {
     picker?.remove();
@@ -472,6 +474,8 @@ const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
 // profiles/<id>.json holds 64 [distance_m, elevation_m] samples and the mtb:scale runs along the
 // trail ([from_m, grade]), fetched only for visible hits.
 let selectTrail = null; // select(name) once the trail layers exist
+let layersReady;
+const layers = new Promise((done) => { layersReady = done; });
 const searchInput = $('search-input');
 const card = $('trail-card');
 let searchUrl, index, profiles = new Map();
@@ -583,31 +587,16 @@ function pick(entry, fromMap = false) {
   searchInput.blur();
   $('search-results').hidden = true;
   $('search-clear').hidden = false;
-  $('card-length').textContent = km(entry.length_m);
-  $('card-ascent').textContent = entry.ascent_m == null ? '–' : `↑ ${entry.ascent_m} m`;
-  $('card-descent').textContent = entry.descent_m == null ? '–' : `↓ ${entry.descent_m} m`;
   $('card-grades').replaceChildren(...gradeChips(entry.grades, true),
     ...(entry.extra || []).map((text) => el('span', { className: 'chip plain', textContent: text })));
-  $('card-profile').replaceChildren();
-  $('card-grade-bar').replaceChildren();
-  $('card-axis-end').textContent = '';
-  $('pill-text').textContent = [km(entry.length_m), entry.ascent_m == null ? '' : `↑${entry.ascent_m} m`].filter(Boolean).join(' · ');
   picked = entry;
-  cardProfile = null;
-  $('card-cursor').hidden = true;
+  setTrailParam(...entry.id.startsWith('way/') ? ['way', entry.id.slice(4)] : ['trail', entry.id]);
+  cardData = null;
+  renderCard();
   (entry.profile ?? profile(entry.id)).then((data) => {
     if (picked !== entry || !data) return;
-    const { elevation, grades } = data;
-    const end = elevation[elevation.length - 1][0];
-    cardProfile = { elevation, grades, ...drawProfile($('card-profile'), elevation) };
-    // The trail's grade along its length, coloured like the lines; ungraded stretches stay faint.
-    $('card-grade-bar').replaceChildren(...grades.map(([from, grade], i) => {
-      const seg = el('span', { title: grade ? `S${grade}` : 'Ugradert' });
-      seg.style.flexGrow = Math.max((grades[i + 1]?.[0] ?? end) - from, 0);
-      seg.style.background = gradeColor(grade);
-      return seg;
-    }));
-    $('card-axis-end').textContent = km(end);
+    cardData = data;
+    renderCard();
   });
   showCard();
   if (fromMap) return;
@@ -628,7 +617,10 @@ function showCard() {
 
 function hideCard() {
   picked = null;
+  setTrailParam();
   card.hidden = $('trail-pill').hidden = true;
+  showEnds(null);
+  scrubMarker.remove();
 }
 
 function clearSearch() {
@@ -667,20 +659,98 @@ async function tapTrail(name, { lng, lat }) {
   if (!entry) return close(); // no index (old release, offline): the highlight alone
   pick(entry, true);
 }
+// The profile, grade runs and line run from the trail's start (see build-search.py); flipping
+// reverses all three. Ascent and descent were measured in the stored direction.
+const reverseProfile = ({ elevation, line, grades }) => {
+  const end = elevation.at(-1)[0];
+  return {
+    elevation: elevation.map(([d, e]) => [end - d, e]).reverse(),
+    line: line && [...line].reverse(),
+    grades: grades.map(([, grade], i) => [end - (grades[i + 1]?.[0] ?? end), grade]).reverse(),
+  };
+};
+// Trails this device has turned around, by id. ponytail: one key per flipped trail, never pruned.
+const flipped = (() => { try { return JSON.parse(localStorage.getItem('flipped')) || {}; } catch { return {}; } })();
+let cardData = null; // the picked trail's stored profile, once loaded
+
+// Stats, profile, grade bar and map markers for the picked trail, in the chosen direction.
+function renderCard() {
+  const flip = !!flipped[picked.id];
+  const [up, down] = flip ? [picked.descent_m, picked.ascent_m] : [picked.ascent_m, picked.descent_m];
+  $('card-length').textContent = km(picked.length_m);
+  $('card-ascent').textContent = up == null ? '–' : `↑ ${up} m`;
+  $('card-descent').textContent = down == null ? '–' : `↓ ${down} m`;
+  $('pill-text').textContent = [km(picked.length_m), up == null ? '' : `↑${up} m`].filter(Boolean).join(' · ');
+  $('card-flip').hidden = !cardData;
+  $('card-cursor').hidden = true;
+  scrubMarker.remove();
+  cardProfile = null;
+  if (!cardData) {
+    $('card-profile').replaceChildren();
+    $('card-grade-bar').replaceChildren();
+    $('card-axis-end').textContent = '';
+    return showEnds(null);
+  }
+  const data = flip ? reverseProfile(cardData) : cardData;
+  const end = data.elevation.at(-1)[0];
+  cardProfile = { ...data, ...drawProfile($('card-profile'), data.elevation) };
+  // The trail's grade along its length, coloured like the lines; ungraded stretches stay faint.
+  $('card-grade-bar').replaceChildren(...data.grades.map(([from, grade], i) => {
+    const seg = el('span', { title: grade ? `S${grade}` : 'Ugradert' });
+    seg.style.flexGrow = Math.max((data.grades[i + 1]?.[0] ?? end) - from, 0);
+    seg.style.background = gradeColor(grade);
+    return seg;
+  }));
+  $('card-axis-end').textContent = km(end);
+  showEnds(data.line);
+}
+
+$('card-flip').addEventListener('click', () => {
+  if (flipped[picked.id]) delete flipped[picked.id];
+  else flipped[picked.id] = true;
+  try { localStorage.setItem('flipped', JSON.stringify(flipped)); } catch {}
+  renderCard();
+});
+
+// Start (an arrow along the trail) and finish (chequered) on the map; a loop gets the start only.
+let endMarkers = [];
+const ARROW = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" '
+  + 'stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+function showEnds(line) {
+  for (const marker of endMarkers) marker.remove();
+  endMarkers = [];
+  if (!line?.length) return;
+  const [start, finish] = [line[0], line.at(-1)];
+  const ahead = line.find((pt) => metres(start, pt) > 30) ?? finish;
+  const heading = Math.atan2((ahead[0] - start[0]) * Math.cos(start[1] * Math.PI / 180), ahead[1] - start[1]) * 180 / Math.PI;
+  const add = (element, at, rotation = 0) => endMarkers.push(
+    new maplibregl.Marker({ element, rotation, rotationAlignment: 'map' }).setLngLat(at).addTo(map));
+  if (metres(start, finish) > 60) add(el('div', { className: 'trail-end finish', title: 'Mål' }), finish);
+  add(el('div', { className: 'trail-end start', title: 'Start', innerHTML: ARROW }), start, heading);
+}
+
 $('card-min').addEventListener('click', () => { cardMinimized = true; showCard(); });
 $('trail-pill').addEventListener('click', () => { cardMinimized = false; showCard(); });
 
 // Point at (mouse) or drag a finger along the profile: a marker with the height there.
-let cardProfile = null; // { elevation, grades, low, scale, end } of the card's profile
+let cardProfile = null; // { elevation, line, grades, low, scale, end } as drawn
+// Follows the finger on the map while scrubbing the profile.
+const scrubMarker = new maplibregl.Marker({ element: el('div', { className: 'trail-scrub' }) });
 function scrub(event) {
   if (!cardProfile) return;
-  const { elevation, grades, low, scale, end } = cardProfile;
+  const { elevation, line, grades, low, scale, end } = cardProfile;
   const box = $('card-profile').getBoundingClientRect();
   const x = Math.min(Math.max(event.clientX - box.left, 0), box.width);
   const at = x / box.width * end;
   const i = Math.max(elevation.findIndex(([d]) => d >= at), 1);
   const [d0, e0] = elevation[i - 1], [d1, e1] = elevation[i];
-  const height = e0 + (e1 - e0) * ((at - d0) / (d1 - d0 || 1));
+  const f = (at - d0) / (d1 - d0 || 1);
+  const height = e0 + (e1 - e0) * f;
+  if (line) {
+    const [a, b] = [line[i - 1], line[i]];
+    scrubMarker.setLngLat([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+    if (!scrubMarker.getElement().isConnected) scrubMarker.addTo(map);
+  }
   const grade = grades.findLast(([from]) => from <= at)?.[1];
   const cursor = $('card-cursor'), tip = $('card-cursor-tip');
   cursor.hidden = false;
@@ -697,8 +767,44 @@ profileWrap.addEventListener('pointerdown', (e) => { profileWrap.setPointerCaptu
 profileWrap.addEventListener('pointermove', (e) => {
   if (e.pointerType === 'mouse' || profileWrap.hasPointerCapture(e.pointerId)) scrub(e);
 });
-const endScrub = (e) => { if (e.pointerType !== 'mouse' || e.type === 'pointerleave') $('card-cursor').hidden = true; };
+const endScrub = (e) => {
+  if (e.pointerType === 'mouse' && e.type !== 'pointerleave') return;
+  $('card-cursor').hidden = true;
+  scrubMarker.remove();
+};
 for (const type of ['pointerup', 'pointercancel', 'pointerleave']) profileWrap.addEventListener(type, endScrub);
+
+// ---------- trail in the URL ----------
+// ?trail=<search id> or ?way=<OSM way id>, next to MapLibre's #zoom/lat/lng, so a link opens the
+// same card. replaceState: picking trails shouldn't fill the back button.
+function setTrailParam(key, value) {
+  const url = new URL(location.href);
+  url.searchParams.delete('trail');
+  url.searchParams.delete('way');
+  if (key) url.searchParams.set(key, value);
+  if (url.href !== location.href) history.replaceState(history.state, '', url);
+}
+
+{
+  const linked = new URLSearchParams(location.search);
+  const [trailId, wayId] = [linked.get('trail'), Number(linked.get('way'))];
+  if (trailId) {
+    Promise.all([release, layers]).then(async () => {
+      const entry = (await loadIndex())?.find((e) => e.id === trailId);
+      if (!entry) return setTrailParam(); // from an older release, or no index
+      pick(entry, linkedView); // without a view in the link, fit the trail
+      if (linkedView) selectTrail(entry.name);
+    }).catch(() => {});
+  } else if (wayId) {
+    // A segment comes from the tiles, so it needs the link's view (zoom 14+) loaded first.
+    layers.then(() => map.once('idle', () => {
+      const feature = map.querySourceFeatures('trails', { sourceLayer: 'trails', filter: ['==', ['id'], wayId] })[0];
+      if (!feature) return setTrailParam();
+      const [lng, lat] = feature.geometry.type === 'LineString' ? feature.geometry.coordinates[0] : feature.geometry.coordinates[0][0];
+      tapSegment(feature, { lng, lat });
+    }));
+  }
+}
 
 // ---------- unnamed segments ----------
 // A trail without a name gets a card for the way itself: type, grade and class from the tiles,
@@ -826,7 +932,12 @@ async function tapSegment(feature, lngLat) {
   let line = wayLine(id);
   // Long ways run out of the loaded tiles: widen the view to the part found so far, a few times,
   // as long as ways stay their own features. ponytail: past that the length is a lower bound.
-  for (let i = 0; i < 3 && line.length && !line.every((pt) => map.getBounds().contains(pt)); i++) {
+  // In view means clear of the search box above and the card below (not shown yet: its usual height).
+  const clear = (pt) => {
+    const { x, y } = map.project(pt), { clientWidth: w, clientHeight: h } = map.getContainer();
+    return x >= 0 && x <= w && y >= 70 && y <= h - (cardMinimized ? 80 : 260);
+  };
+  for (let i = 0; i < 3 && line.length && !line.every(clear); i++) {
     const lngs = line.map(([x]) => x), lats = line.map(([, y]) => y);
     const camera = map.cameraForBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
       { padding: { top: 70, bottom: 260, left: 40, right: 40 } });
@@ -864,6 +975,21 @@ async function tapSegment(feature, lngLat) {
   }
   const grade = p.grade || '';
   const type = WAY_TYPES[p.highway] || 'Sti';
+  const at = Array.from({ length: 64 }, (_, i) => i * length / 63);
+  const pointAt = (d) => {
+    const found = samples.findIndex(([sd]) => sd >= d);
+    const j = Math.max(found < 0 ? samples.length - 1 : found, 1);
+    const [d0, a] = samples[j - 1], [d1, b] = samples[j], f = Math.min((d - d0) / (d1 - d0 || 1), 1);
+    return [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])];
+  };
+  let data = known.length
+    ? { elevation: at.map((d) => [Math.round(d), Math.round(heightAt(d))]), line: at.map(pointAt), grades: [[0, grade]] }
+    : null;
+  // The tiles carry no oneway or incline, so like an untagged trail: climb from the lower end.
+  if (data && data.elevation[0][1] > data.elevation.at(-1)[1]) {
+    data = reverseProfile(data);
+    [ascent, descent] = [descent, ascent];
+  }
   pick({
     id: `way/${id}`,
     name: `${type} uten navn`,
@@ -873,10 +999,7 @@ async function tapSegment(feature, lngLat) {
     descent_m: known.length ? Math.round(descent) : null,
     extra: [p.highway === 'track' && p.tracktype ? `${type} ${p.tracktype.replace('grade', 'G')}` : type,
       ...(p.mtbclass ? [`MTB-klasse ${p.mtbclass}`] : [])],
-    profile: Promise.resolve(known.length ? {
-      elevation: Array.from({ length: 64 }, (_, i) => [Math.round(i * length / 63), Math.round(heightAt(i * length / 63))]),
-      grades: [[0, grade]],
-    } : null),
+    profile: Promise.resolve(data),
   }, true);
 }
 

@@ -18,7 +18,7 @@
   <way id="106"><nd ref="11"/><nd ref="12"/><tag k="highway" v="path"/><tag k="name" v="Boundary path"/></way>
   <way id="108"><nd ref="15"/><nd ref="16"/><tag k="highway" v="path"/><tag k="mtb:name" v="MTB-only name"/></way>
   <way id="109"><nd ref="16"/><nd ref="17"/><tag k="highway" v="path"/><tag k="mtb:name" v="MTB-only name"/></way>
-  <way id="110"><nd ref="17"/><nd ref="18"/><tag k="highway" v="path"/><tag k="mtb:name" v="MTB-only name"/><tag k="mtb:scale" v="2"/></way>
+  <way id="110"><nd ref="17"/><nd ref="18"/><tag k="highway" v="path"/><tag k="mtb:name" v="MTB-only name"/><tag k="mtb:scale" v="2"/><tag k="oneway" v="-1"/></way>
   <way id="111"><nd ref="19"/><nd ref="20"/><tag k="highway" v="path"/><tag k="name" v="Named path"/></way>
   <way id="107"><nd ref="13"/><nd ref="14"/><tag k="highway" v="residential"/></way>
   <relation id="201"><member type="way" ref="102" role=""/><tag k="type" v="route"/><tag k="route" v="mtb"/><tag k="name" v="Pionéren"/></relation>

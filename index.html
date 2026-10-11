@@ -96,6 +96,13 @@
       align-items: center; padding: 4px 9px; border-radius: 8px; background: #fff; color: #111827;
       font-size: 11px; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
     .cursor-tip b { font-size: 15px; }
+    .card-actions { display: flex; gap: 8px; }
+    .trail-end { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; box-sizing: border-box;
+      box-shadow: 0 1px 4px rgba(0,0,0,.45); display: grid; place-items: center; }
+    .trail-end.start { background: #16a34a; color: #fff; }
+    .trail-end.finish { background: repeating-conic-gradient(#111 0 25%, #fff 0 50%) 0 0 / 8px 8px; }
+    .trail-scrub { width: 16px; height: 16px; border-radius: 50%; background: #ff6fb5; border: 3px solid #fff;
+      box-sizing: border-box; box-shadow: 0 1px 4px rgba(0,0,0,.45); pointer-events: none; }
   </style>
 </head>
 <body>
@@ -119,10 +126,16 @@
       <div><b id="card-length"></b><span>Lengde</span></div>
       <div><b id="card-ascent"></b><span>Stigning</span></div>
       <div><b id="card-descent"></b><span>Nedstigning</span></div>
+      <div class="card-actions">
+      <button id="card-flip" class="icon-button" type="button" aria-label="Snu retningen" title="Snu retningen" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h15l-4-4M20 16H5l4 4"/></svg>
+      </button>
       <button id="card-min" class="icon-button" type="button" aria-label="Minimer">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
       </button>
+      </div>
     </div>
     <div class="profile-wrap" id="card-profile-wrap">
       <svg class="profile" id="card-profile" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"></svg>
