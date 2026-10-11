@@ -345,33 +345,49 @@ map.once('style.load', async () => {
     'symbol-placement': 'line',
     'symbol-spacing': 200,
     // Trails wind; MapLibre sums the turns under each ~3/5-glyph stretch of a label and drops
-    // it past this. Higher values let letters pile up on bends. The tiles smooth label lines
-    // by 20 m at z13 (doubling per zoom out) so most labels pass; 15 m left too many zigzags
-    // for z13-14. Small text at z11-14 helps too.
-    'text-max-angle': 70,
+    // it past this. 90 labels a few more winding trails than 70 without letters piling up
+    // much; higher values do. The tiles smooth label lines by 20 m at z13 (doubling per zoom
+    // out) so most labels pass; 15 m left too many zigzags for z13-14.
+    'text-max-angle': 90,
     'text-font': ['Noto Sans Bold'],
-    'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10, 14, 11, 15, 13, 16, 15],
   };
   const labelPaint = { 'text-color': '#111827', 'text-halo-color': '#ffffff', 'text-halo-width': 2 };
-  // Route names share the line with section names, so they only go where no name already is.
-  // MapLibre places the upper layer first, so trail names (added last) win.
-  map.addLayer({
-    id: 'trails-label-route', type: 'symbol', ...labelSource, minzoom: 11,
-    filter: ['has', 'route'],
-    layout: { ...labelLayout, 'text-field': ['get', 'route'] },
-    paint: { ...labelPaint, 'text-color': '#14532d' },
-  });
   // A named section of a route shows both as one label, e.g. "Bukkene bruse / Pionéren".
   const sectionLabel = ['case',
     ['any', ['==', prop('routename'), ''], ['==', prop('routename'), own]], own,
     ['concat', own, ' / ', prop('routename')]];
-  map.addLayer({
-    id: 'trails-label', type: 'symbol', ...labelSource, minzoom: 11,
-    filter: ['has', 'name'],
-    // Trails run close together; overlapping names beat names that vanish.
-    layout: { ...labelLayout, 'text-field': sectionLabel, 'text-allow-overlap': true },
-    paint: labelPaint,
-  });
+  // With a zoom-dependent text-size, MapLibre fits line labels (length and text-max-angle) at
+  // the z18 size, so a 15 px top size dropped half the small z12-14 labels. Hence a constant
+  // 10 px below z15 and a second set of layers for the growing size above.
+  for (const [suffix, zooms, size] of [
+    ['', { minzoom: 11, maxzoom: 15 }, 10],
+    ['-z15', { minzoom: 15 }, ['interpolate', ['linear'], ['zoom'], 15, 13, 16, 15]],
+  ]) {
+    const layout = { ...labelLayout, 'text-size': size };
+    // Route names share the line with section names, so they only go where no name already is.
+    // MapLibre places the upper layer first, so trail names (added last) win.
+    map.addLayer({
+      id: `trails-label-route${suffix}`, type: 'symbol', ...labelSource, ...zooms,
+      filter: ['has', 'route'],
+      layout: { ...layout, 'text-field': ['get', 'route'] },
+      paint: { ...labelPaint, 'text-color': '#14532d' },
+    });
+    // Where "Salamanderen / Pionéren" is too long for the section, show "Salamanderen" alone.
+    // It collides with everything, so it only goes where the combined label didn't fit.
+    map.addLayer({
+      id: `trails-label-own${suffix}`, type: 'symbol', ...labelSource, ...zooms,
+      filter: ['all', ['has', 'name'], ['!=', sectionLabel, own]],
+      layout: { ...layout, 'text-field': own },
+      paint: labelPaint,
+    });
+    map.addLayer({
+      id: `trails-label${suffix}`, type: 'symbol', ...labelSource, ...zooms,
+      filter: ['has', 'name'],
+      // Trails run close together; overlapping names beat names that vanish.
+      layout: { ...layout, 'text-field': sectionLabel, 'text-allow-overlap': true },
+      paint: labelPaint,
+    });
+  }
 
   // ---------- select a trail ----------
   // A trail is a name: the way's own name or one of its MTB routes. Tapping a way lists
