@@ -73,7 +73,8 @@ const map = new maplibregl.Map({
   ...(saved ? { center: saved.center, zoom: saved.zoom } : { bounds: NORWAY }),
   hash: true,
   maxPitch: 75,
-  attributionControl: { compact: true },
+  // The Terrarium heights feed unnamed segments' profiles whichever base map is in use.
+  attributionControl: { compact: true, customAttribution: 'Terreng © Mapzen / AWS' },
   locale: {
     'AttributionControl.ToggleAttribution': 'Vis eller skjul kilder',
     'AttributionControl.MapFeedback': 'Gi tilbakemelding om kartet',
@@ -225,7 +226,6 @@ map.once('style.load', async () => {
       encoding: 'terrarium',
       tileSize: 256,
       maxzoom: 13,
-      attribution: 'Terreng © Mapzen / AWS',
     });
     map.addLayer({
       id: 'hillshade',
@@ -424,12 +424,14 @@ map.once('style.load', async () => {
       const opacity = type === 'symbol' ? 'text-opacity' : 'line-opacity';
       return { id, opacity, base: map.getPaintProperty(id, opacity) ?? 1 };
     });
-  const select = (name) => {
+  // select(name), or select({ id }) for one way: an unnamed segment, from z14 where features are ways.
+  const select = (trail) => {
+    const filter = trail?.id != null ? ['==', ['id'], trail.id] : trail && trailFilter(trail);
     for (const { id, opacity, base } of dimmed) {
-      map.setPaintProperty(id, opacity, name ? ['case', trailFilter(name), base, ['*', 0.25, base]] : base);
+      map.setPaintProperty(id, opacity, filter ? ['case', filter, base, ['*', 0.25, base]] : base);
     }
-    if (name) map.setFilter('trails-selected', trailFilter(name));
-    map.setLayoutProperty('trails-selected', 'visibility', name ? 'visible' : 'none');
+    if (filter) map.setFilter('trails-selected', filter);
+    map.setLayoutProperty('trails-selected', 'visibility', filter ? 'visible' : 'none');
   };
   selectTrail = select;
   let picker;
@@ -444,6 +446,8 @@ map.once('style.load', async () => {
       if (name) names.add(name);
       for (const route of (p.routename || p.route || '').split(' / ')) if (route) names.add(route);
     }
+    const way = nearestWay(hits.filter((f) => f.source === 'trails'), point);
+    if (!names.size && way) return tapSegment(way, lngLat);
     if (names.size <= 1) return tapTrail([...names][0], lngLat);
     const list = document.createElement('div');
     list.className = 'trail-picker';
@@ -582,7 +586,8 @@ function pick(entry, fromMap = false) {
   $('card-length').textContent = km(entry.length_m);
   $('card-ascent').textContent = entry.ascent_m == null ? '–' : `↑ ${entry.ascent_m} m`;
   $('card-descent').textContent = entry.descent_m == null ? '–' : `↓ ${entry.descent_m} m`;
-  $('card-grades').replaceChildren(...gradeChips(entry.grades, true));
+  $('card-grades').replaceChildren(...gradeChips(entry.grades, true),
+    ...(entry.extra || []).map((text) => el('span', { className: 'chip plain', textContent: text })));
   $('card-profile').replaceChildren();
   $('card-grade-bar').replaceChildren();
   $('card-axis-end').textContent = '';
@@ -590,7 +595,7 @@ function pick(entry, fromMap = false) {
   picked = entry;
   cardProfile = null;
   $('card-cursor').hidden = true;
-  profile(entry.id).then((data) => {
+  (entry.profile ?? profile(entry.id)).then((data) => {
     if (picked !== entry || !data) return;
     const { elevation, grades } = data;
     const end = elevation[elevation.length - 1][0];
@@ -694,6 +699,186 @@ profileWrap.addEventListener('pointermove', (e) => {
 });
 const endScrub = (e) => { if (e.pointerType !== 'mouse' || e.type === 'pointerleave') $('card-cursor').hidden = true; };
 for (const type of ['pointerup', 'pointercancel', 'pointerleave']) profileWrap.addEventListener(type, endScrub);
+
+// ---------- unnamed segments ----------
+// A trail without a name gets a card for the way itself: type, grade and class from the tiles,
+// length from its pieces in the loaded tiles, heights from the Terrarium tiles (~10 m at z14).
+const WAY_TYPES = { path: 'Sti', track: 'Traktorvei', bridleway: 'Ridesti', cycleway: 'Sykkelvei', footway: 'Gangvei' };
+const SEGMENT_ZOOM = 14; // below it the tiles merge touching ways and drop their ids
+const TERRAIN_ZOOM = 14;
+const metres = ([x1, y1], [x2, y2]) =>
+  6371000 * Math.hypot((x2 - x1) * Math.PI / 180 * Math.cos((y1 + y2) * Math.PI / 360), (y2 - y1) * Math.PI / 180);
+
+// The part of a line inside tile z/x/y (Liang-Barsky per segment, in lng/lat).
+function clipToTile(line, z, x, y) {
+  const n = 2 ** z;
+  const lat = (v) => Math.atan(Math.sinh(Math.PI * (1 - 2 * v / n))) * 180 / Math.PI;
+  const [w, e, s, north] = [x / n * 360 - 180, (x + 1) / n * 360 - 180, lat(y + 1), lat(y)];
+  const parts = [];
+  let current = null;
+  for (let i = 1; i < line.length; i++) {
+    const [x0, y0] = line[i - 1], [x1, y1] = line[i], dx = x1 - x0, dy = y1 - y0;
+    let t0 = 0, t1 = 1;
+    const inside = [[-dx, x0 - w], [dx, e - x0], [-dy, y0 - s], [dy, north - y0]].every(([p, q]) => {
+      if (p === 0) return q >= 0;
+      const t = q / p;
+      if (p < 0) { if (t > t1) return false; t0 = Math.max(t0, t); } else { if (t < t0) return false; t1 = Math.min(t1, t); }
+      return true;
+    });
+    if (!inside) { current = null; continue; }
+    if (!current || t0 > 0) parts.push(current = [[x0 + t0 * dx, y0 + t0 * dy]]);
+    current.push([x0 + t1 * dx, y0 + t1 * dy]);
+    if (t1 < 1) current = null;
+  }
+  return parts;
+}
+
+// Way `id` as one line from its pieces in the loaded tiles. Pieces overlap by the tile buffer, so
+// each is cut back to its own tile, then joined end to end.
+// ponytail: the piece's tile is a MapLibre internal (_vectorTileFeature._x/_y/_z, pinned 4.7.1);
+// pieces in tiles that aren't loaded are missing, so tapSegment widens the view first.
+function wayLine(id) {
+  const parts = [], tiles = new Set();
+  for (const f of map.querySourceFeatures('trails', { sourceLayer: 'trails', filter: ['==', ['id'], id] })) {
+    const { _x: x, _y: y, _z: z } = f._vectorTileFeature;
+    if (tiles.has(`${z}/${x}/${y}`)) continue;
+    tiles.add(`${z}/${x}/${y}`);
+    const lines = f.geometry.type === 'MultiLineString' ? f.geometry.coordinates : [f.geometry.coordinates];
+    for (const line of lines) parts.push(...clipToTile(line, z, x, y));
+  }
+  let line = parts.shift() || [];
+  const near = (a, b) => metres(a, b) < 2;
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [i, p] of parts.entries()) {
+      if (near(line.at(-1), p[0])) line = line.concat(p.slice(1));
+      else if (near(line.at(-1), p.at(-1))) line = line.concat(p.slice(0, -1).reverse());
+      else if (near(line[0], p.at(-1))) line = p.concat(line.slice(1));
+      else if (near(line[0], p[0])) line = p.slice(1).reverse().concat(line);
+      else continue;
+      parts.splice(i, 1);
+      grew = true;
+      break;
+    }
+  }
+  return line;
+}
+
+const terrainTiles = new Map();
+const terrainTile = (key) => {
+  if (!terrainTiles.has(key)) {
+    terrainTiles.set(key, fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${TERRAIN_ZOOM}/${key}.png`)
+      .then((res) => res.ok ? res.blob() : Promise.reject(new Error(`terrain ${res.status}`)))
+      .then(createImageBitmap)
+      .then((image) => {
+        const ctx = new OffscreenCanvas(256, 256).getContext('2d');
+        ctx.drawImage(image, 0, 0);
+        return ctx.getImageData(0, 0, 256, 256).data;
+      })
+      .catch(() => { terrainTiles.delete(key); return null; }));
+  }
+  return terrainTiles.get(key);
+};
+// Height in metres at [lng, lat] (nearest pixel), or null without a tile.
+async function terrainHeight([lng, lat]) {
+  const n = 2 ** TERRAIN_ZOOM;
+  const fx = (lng + 180) / 360 * n, fy = (1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2 * n;
+  const x = Math.floor(fx), y = Math.floor(fy);
+  const data = await terrainTile(`${x}/${y}`);
+  if (!data) return null;
+  const i = (Math.min(Math.floor((fy - y) * 256), 255) * 256 + Math.min(Math.floor((fx - x) * 256), 255)) * 4;
+  return data[i] * 256 + data[i + 1] + data[i + 2] / 256 - 32768; // Terrarium encoding
+}
+
+// The feature whose line passes closest to the screen point: a tap often catches two ways.
+function nearestWay(features, { x, y }) {
+  let best = null, bestDistance = Infinity;
+  for (const f of features) {
+    for (const line of f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.coordinates) {
+      const pts = line.map((c) => map.project(c));
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1], dx = pts[i].x - a.x, dy = pts[i].y - a.y;
+        const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+        const d = Math.hypot(a.x + t * dx - x, a.y + t * dy - y);
+        if (d < bestDistance) { best = f; bestDistance = d; }
+      }
+    }
+  }
+  return best;
+}
+
+async function tapSegment(feature, lngLat) {
+  const unnamed = (f) => f.source === 'trails' && f.id != null && !f.properties.name && !f.properties.mtbname && !f.properties.routename;
+  if (feature.id == null || map.getZoom() < SEGMENT_ZOOM) {
+    // z11-13 merges touching ways (keeping one way's id): zoom in to where each way is its own
+    // feature, then tap again.
+    map.easeTo({ center: lngLat, zoom: SEGMENT_ZOOM });
+    map.once('idle', () => {
+      const point = map.project(lngLat);
+      const way = nearestWay(map.queryRenderedFeatures([[point.x - 10, point.y - 10], [point.x + 10, point.y + 10]])
+        .filter(unnamed), point);
+      if (way) tapSegment(way, lngLat);
+    });
+    return;
+  }
+  const { id, properties: p } = feature;
+  selectTrail?.({ id });
+  let line = wayLine(id);
+  // Long ways run out of the loaded tiles: widen the view to the part found so far, a few times,
+  // as long as ways stay their own features. ponytail: past that the length is a lower bound.
+  for (let i = 0; i < 3 && line.length && !line.every((pt) => map.getBounds().contains(pt)); i++) {
+    const lngs = line.map(([x]) => x), lats = line.map(([, y]) => y);
+    const camera = map.cameraForBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+      { padding: { top: 70, bottom: 260, left: 40, right: 40 } });
+    if (!camera || camera.zoom < SEGMENT_ZOOM) break;
+    map.easeTo({ ...camera, zoom: Math.min(camera.zoom, map.getZoom()) });
+    await new Promise((done) => map.once('idle', done));
+    line = wayLine(id);
+  }
+  if (line.length < 2) return;
+
+  // Points every 10 m, their heights, then the same 64-sample profile as a search entry.
+  const samples = [[0, line[0]]];
+  let length = 0;
+  for (let i = 1; i < line.length; i++) {
+    const step = metres(line[i - 1], line[i]);
+    for (let at = Math.ceil(length / 10 + 1e-9) * 10; at < length + step; at += 10) {
+      const f = (at - length) / step;
+      samples.push([at, [line[i - 1][0] + f * (line[i][0] - line[i - 1][0]), line[i - 1][1] + f * (line[i][1] - line[i - 1][1])]]);
+    }
+    length += step;
+  }
+  samples.push([length, line.at(-1)]);
+  const heights = await Promise.all(samples.map(([, pt]) => terrainHeight(pt)));
+  const known = samples.map(([d], i) => [d, heights[i]]).filter(([, h]) => h != null);
+  const heightAt = (d) => {
+    const j = known.findIndex(([kd]) => kd >= d);
+    if (j <= 0) return known[j === 0 ? 0 : known.length - 1][1];
+    const [d0, h0] = known[j - 1], [d1, h1] = known[j];
+    return h0 + (h1 - h0) * (d - d0) / (d1 - d0 || 1);
+  };
+  let ascent = 0, descent = 0;
+  for (let i = 1; i < known.length; i++) {
+    const diff = known[i][1] - known[i - 1][1];
+    if (diff > 0) ascent += diff; else descent -= diff;
+  }
+  const grade = p.grade || '';
+  const type = WAY_TYPES[p.highway] || 'Sti';
+  pick({
+    id: `way/${id}`,
+    name: `${type} uten navn`,
+    length_m: Math.round(length),
+    grades: grade ? { scale: { [grade]: Math.round(length) } } : {},
+    ascent_m: known.length ? Math.round(ascent) : null,
+    descent_m: known.length ? Math.round(descent) : null,
+    extra: [p.highway === 'track' && p.tracktype ? `${type} ${p.tracktype.replace('grade', 'G')}` : type,
+      ...(p.mtbclass ? [`MTB-klasse ${p.mtbclass}`] : [])],
+    profile: Promise.resolve(known.length ? {
+      elevation: Array.from({ length: 64 }, (_, i) => [Math.round(i * length / 63), Math.round(heightAt(i * length / 63))]),
+      grades: [[0, grade]],
+    } : null),
+  }, true);
+}
 
 // iOS keeps the layout viewport under the keyboard; the visual viewport is what's left above it.
 window.visualViewport?.addEventListener('resize', () => {

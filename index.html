@@ -66,6 +66,7 @@
     .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 999px;
       background: rgba(255,255,255,.1); font-size: 11px; color: #e5e7eb; }
     .chip::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--grade); }
+    .chip.plain::before { display: none; }
     .spark { flex: none; width: 84px; height: 34px; }
     .spark path:first-child, .profile path:first-child { fill: rgba(255,111,181,.2); }
     .spark path:last-child, .profile path:last-child { fill: none; stroke: #ff6fb5; stroke-width: 1.5;
