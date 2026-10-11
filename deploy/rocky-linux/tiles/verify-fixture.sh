@@ -64,3 +64,39 @@ assert 106 in {f["id"] for f in right}
 print(f"z6={len(z6)} z11={len(z11)} z13={len(z13)} z16={len(z16)}: schema, zoom rules, and boundary ID ok")
 PY
 '
+
+# Search index: entries match the fixture's geometry and tags, every entry has a 64-point profile.
+python3 - "$(dirname "$archive")" "$root/deploy/rocky-linux/tiles/fixture.osm" <<'PY'
+import json, math, sys
+import xml.etree.ElementTree as ET
+out, osm = sys.argv[1:]
+nodes = {n.get('id'): (float(n.get('lon')), float(n.get('lat'))) for n in ET.parse(osm).iter('node')}
+ways = {w.get('id'): [nodes[nd.get('ref')] for nd in w.iter('nd')] for w in ET.parse(osm).iter('way')}
+def length(*ids):
+ return sum(6371000 * math.hypot(math.radians(b[0] - a[0]) * math.cos(math.radians((a[1] + b[1]) / 2)), math.radians(b[1] - a[1]))
+  for w in ids for a, b in zip(ways[w], ways[w][1:]))
+entries = {}
+for e in json.load(open(f'{out}/search.json')):
+ entries.setdefault(e['name'], []).append(e)
+def one(name, ids, bbox, grades):
+ e, = entries[name]
+ assert abs(e['length_m'] - length(*ids)) <= 1 and e['bbox'] == bbox and e['grades'] == grades, (name, e, length(*ids))
+one('Boundary path', ['106'], [10.8, 60.031, 10.95, 60.032], {})
+one('MTB-only name', ['108', '109', '110'], [10.86, 60.043, 10.864, 60.046], {'scale': {'2': round(length('110'))}})
+# A route's entry is its member ways; 102 is within reach of 108-110, so one entry.
+one('Big race', ['102', '108', '109', '110'], [10.86, 60.032, 10.864, 60.046], {'scale': {'2': round(length('110'))}})
+# Same name 3 km apart: two entries. Race (204) and temporary (205) routes are not trails.
+assert sorted(e['length_m'] for e in entries['Named path']) == [round(length('101'))] * 2, entries['Named path']
+assert not {'Rittet 2012', 'Cup', 'Hiking only'} & entries.keys(), entries.keys()
+for e in sum(entries.values(), []):
+ data = json.load(open(f"{out}/profiles/{e['id']}.json"))
+ profile, runs = data['elevation'], data['grades']
+ # Grade runs start at 0, in order, each a new grade; S2 covers exactly way 110 on MTB-only name.
+ assert runs[0][0] == 0 and all(a[0] < b[0] and a[1] != b[1] for a, b in zip(runs, runs[1:])), (e, runs)
+ if e['name'] == 'MTB-only name':
+  ends = [r[0] for r in runs[1:]] + [profile[-1][0]]
+  assert [round(end - start) for (start, g), end in zip(runs, ends) if g == '2'] in ([round(length('110'))], [round(length('110')) + 1], [round(length('110')) - 1]), runs
+ assert len(profile) == 64 and profile[0][0] == 0 and profile[-1][0] <= e['length_m'] + 1, (e, profile)
+ assert abs((e['ascent_m'] - e['descent_m']) - (profile[-1][1] - profile[0][1])) <= 2, (e, profile)
+print(f'search: {len(sum(entries.values(), []))} entries, bbox, length, grades and profiles ok')
+PY

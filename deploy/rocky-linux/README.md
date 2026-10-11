@@ -245,6 +245,18 @@ cp "site/data/<release>/latest.json" "site/data/.latest.json.$$"
 mv "site/data/.latest.json.$$" site/data/latest.json
 ```
 
+### Search index
+
+The build also writes the trail search index next to the archive: `search.json` (every named
+trail and MTB route with bbox, length, grades, ascent and descent) and `profiles/<id>.json`
+(64 height samples each), and adds `"search"` to `latest.json`. Heights come from Kartverket's
+DTM 10 (CC BY 4.0; the app credits it in the map attribution). Download it once onto the box:
+on [Geonorge](https://kartkatalog.geonorge.no/), pick **DTM 10 Terrengmodell (UTM33)**, all of
+Norway, GeoTIFF, unzip, and put the `.tif` files in `tiles/dem/` (gitignored), or point `DEM=`
+at another directory. Terrain hardly changes, so reuse it for every build. The build refuses to
+start without it. Fixture builds fetch Kartverket's heights for their area over WCS (the tiny
+`fixture` gets a synthetic slope, so its check needs no network) unless you pass `DEM=`.
+
 Verify the published z6 overview and z11, z13, and z16 samples
 against the PBF without rebuilding:
 

@@ -1,7 +1,7 @@
 import maplibregl from 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm';
 
-// `?fixture=name` uses a local archive; production reads the current immutable archive from
-// data/latest.json. A missing manifest leaves the app shell usable without trail data.
+// `?fixture=name` uses a local archive; production reads the current immutable archive (and its
+// search index) from data/latest.json. A missing manifest leaves the app shell usable without trail data.
 const requestedFixture = new URLSearchParams(location.search).get('fixture');
 const fixtureName = requestedFixture === '1' ? 'fixture' : requestedFixture;
 const fixtureMode = fixtureName !== null;
@@ -10,9 +10,15 @@ let vectorTrails = false;
 const manifest = navigator.onLine
   ? fetch('./data/latest.json', { cache: 'no-store' })
     .then((res) => res.ok ? res.json() : Promise.reject(new Error(`manifest ${res.status}`)))
-    .then(({ archive }) => new URL(`./data/${archive}`, location.href).href)
+    .then(({ archive, search }) => ({
+      archive: new URL(`./data/${archive}`, location.href).href,
+      search: search && new URL(`./data/${search}`, location.href).href, // releases before search have none
+    }))
   : Promise.reject(new Error('offline'));
-const trailsReady = (fixtureUrl ? Promise.resolve(fixtureUrl) : manifest).then(async (archiveUrl) => {
+const release = fixtureUrl
+  ? Promise.resolve({ archive: fixtureUrl, search: new URL('search.json', fixtureUrl).href })
+  : manifest;
+const trailsReady = release.then(async ({ archive: archiveUrl }) => {
   const { PMTiles, Protocol } = await import('https://cdn.jsdelivr.net/npm/pmtiles@4.3.0/+esm');
   const protocol = new Protocol();
   maplibregl.addProtocol('pmtiles', protocol.tile);
@@ -68,6 +74,16 @@ const map = new maplibregl.Map({
   hash: true,
   maxPitch: 75,
   attributionControl: { compact: true },
+  locale: {
+    'AttributionControl.ToggleAttribution': 'Vis eller skjul kilder',
+    'AttributionControl.MapFeedback': 'Gi tilbakemelding om kartet',
+    'GeolocateControl.FindMyLocation': 'Finn posisjonen min',
+    'GeolocateControl.LocationNotAvailable': 'Posisjonen er ikke tilgjengelig',
+    'NavigationControl.ResetBearing': 'Snu kartet mot nord',
+    'NavigationControl.ZoomIn': 'Zoom inn',
+    'NavigationControl.ZoomOut': 'Zoom ut',
+    'Popup.Close': 'Lukk',
+  },
 });
 
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-left');
@@ -148,7 +164,7 @@ geolocate.on('trackuserlocationstart', () => {
   (ask ? DeviceOrientationEvent.requestPermission() : Promise.resolve('granted'))
     .then((state) => {
       if (!compassWanted) return; // tracking stopped while the prompt was open
-      if (state !== 'granted') return status('Compass permission denied.');
+      if (state !== 'granted') return status('Fikk ikke tilgang til kompasset.');
       window.addEventListener(orientationEvent, onOrientation);
     })
     .catch(() => {});
@@ -192,7 +208,7 @@ const inNorway = ([x, y]) => {
 let wasInNorway = true;
 map.on('moveend', () => {
   const now = inNorway(map.getCenter().toArray());
-  if (vectorTrails && wasInNorway && !now) status('No trails here. Trails cover Norway only.');
+  if (vectorTrails && wasInNorway && !now) status('Ingen stier her. Kartet dekker bare Norge.');
   wasInNorway = now;
 });
 
@@ -209,7 +225,7 @@ map.once('style.load', async () => {
       encoding: 'terrarium',
       tileSize: 256,
       maxzoom: 13,
-      attribution: 'Terrain © Mapzen / AWS',
+      attribution: 'Terreng © Mapzen / AWS',
     });
     map.addLayer({
       id: 'hillshade',
@@ -251,7 +267,8 @@ map.once('style.load', async () => {
 
   // PMTiles supplies the production trails; the empty source keeps the shell usable offline.
   map.addSource('trails', vectorTrails
-    ? { type: 'vector', url: `pmtiles://${vectorTrails}`, maxzoom: 16 }
+    ? { type: 'vector', url: `pmtiles://${vectorTrails}`, maxzoom: 16,
+      attribution: 'Høydedata © <a href="https://www.kartverket.no/">Kartverket</a>' }
     : { type: 'geojson', data: emptyFC() });
 
   const trailSource = { source: 'trails', ...(vectorTrails && { 'source-layer': 'trails' }) };
@@ -414,6 +431,7 @@ map.once('style.load', async () => {
     if (name) map.setFilter('trails-selected', trailFilter(name));
     map.setLayoutProperty('trails-selected', 'visibility', name ? 'visible' : 'none');
   };
+  selectTrail = select;
   let picker;
   map.on('click', ({ point, lngLat }) => {
     picker?.remove();
@@ -426,24 +444,261 @@ map.once('style.load', async () => {
       if (name) names.add(name);
       for (const route of (p.routename || p.route || '').split(' / ')) if (route) names.add(route);
     }
-    if (names.size <= 1) return select([...names][0]);
+    if (names.size <= 1) return tapTrail([...names][0], lngLat);
     const list = document.createElement('div');
     list.className = 'trail-picker';
     for (const name of [...names].sort()) {
       list.append(Object.assign(document.createElement('button'), {
         textContent: name, // OSM text: never innerHTML
-        onclick: () => { select(name); picker.remove(); },
+        onclick: () => { tapTrail(name, lngLat); picker.remove(); },
       }));
     }
     picker = new maplibregl.Popup({ maxWidth: '260px' }).setLngLat(lngLat).setDOMContent(list).addTo(map);
   });
 
   status(vectorTrails
-    ? 'Ready. Trails cover Norway only.'
-    : 'Trail data needs a connection.', !vectorTrails);
+    ? 'Klar. Kartet dekker bare Norge.'
+    : 'Stidata krever nettilkobling.', !vectorTrails);
 });
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
+
+// ---------- trail search ----------
+// The release's search.json lists every trail (name, bbox, length, grades, ascent/descent);
+// profiles/<id>.json holds 64 [distance_m, elevation_m] samples and the mtb:scale runs along the
+// trail ([from_m, grade]), fetched only for visible hits.
+let selectTrail = null; // select(name) once the trail layers exist
+const searchInput = $('search-input');
+const card = $('trail-card');
+let searchUrl, index, profiles = new Map();
+let picked = null; // the entry shown in the card
+let cardMinimized = false; // kept across picks: someone who folds the card away wants the map
+release.then(({ search }) => {
+  if (!search) return;
+  searchUrl = search;
+  $('search').hidden = false;
+}).catch(() => {});
+
+const GRADE_COLORS = ['#22c55e', '#3b82f6', '#ef4444', '#4b5563', '#facc15', '#facc15', '#facc15'];
+const gradeColor = (grade) => grade === '' ? 'rgba(255,255,255,.2)' : GRADE_COLORS[parseInt(grade, 10)] || '#9ca3af';
+// Case- and accent-blind: "e" finds "é", "a" finds "å" (ø and æ are letters of their own).
+const fold = (text) => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+const km = (m) => m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(m < 10000 ? 1 : 0).replace('.', ',')} km`;
+const el = (tag, props, ...children) => {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children);
+  return node;
+};
+const svgPath = (d) => {
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  p.setAttribute('d', d);
+  return p;
+};
+// mtb:scale chips coloured like the trail lines; withLength adds the metres on each.
+const gradeChips = (grades, withLength) => Object.entries(grades.scale || {}).map(([grade, m]) => {
+  const chip = el('span', { className: 'chip', textContent: `S${grade}${withLength ? ` ${km(m)}` : ''}` });
+  chip.style.setProperty('--grade', gradeColor(grade));
+  return chip;
+});
+const climb = ({ ascent_m: up, descent_m: down }) => up == null ? '' : `↑${up}  ↓${down} m`;
+
+const profile = (id) => {
+  if (!profiles.has(id)) {
+    profiles.set(id, fetch(new URL(`profiles/${id}.json`, searchUrl))
+      .then((res) => res.ok ? res.json() : null).catch(() => { profiles.delete(id); return null; }));
+  }
+  return profiles.get(id);
+};
+// Area and line in a 100×30 box. Every profile spans at least 250 m of height, so a flat trail
+// looks flat next to a steep one. Returns the scale, for pointing at a spot on it.
+function drawProfile(svg, points) {
+  if (!points?.length) return null;
+  const heights = points.map(([, e]) => e);
+  const low = Math.min(...heights);
+  const scale = 28 / Math.max(Math.max(...heights) - low, 250);
+  const end = points[points.length - 1][0] || 1;
+  const line = points.map(([d, e], i) => `${i ? 'L' : 'M'}${(d / end * 100).toFixed(1)} ${(29 - (e - low) * scale).toFixed(1)}`).join('');
+  svg.replaceChildren(svgPath(`${line}L100 30L0 30Z`), svgPath(line));
+  return { low, scale, end };
+}
+
+const sparkObserver = new IntersectionObserver((seen) => {
+  for (const { isIntersecting, target } of seen) {
+    if (!isIntersecting) continue;
+    sparkObserver.unobserve(target);
+    profile(target.dataset.id).then((data) => drawProfile(target, data?.elevation));
+  }
+}, { root: $('search-list') });
+
+function resultRow(entry) {
+  const spark = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  spark.setAttribute('class', 'spark');
+  spark.setAttribute('viewBox', '0 0 100 30');
+  spark.setAttribute('preserveAspectRatio', 'none');
+  spark.dataset.id = entry.id;
+  sparkObserver.observe(spark);
+  const info = el('span', { className: 'result-info' },
+    el('span', { className: 'result-name', textContent: entry.name }), // OSM text: never innerHTML
+    el('span', { className: 'meta', textContent: `${km(entry.length_m)}   ${climb(entry)}` }),
+    el('span', { className: 'chips' }, ...gradeChips(entry.grades, false)));
+  return el('li', {}, el('button', { type: 'button', className: 'result', onclick: () => pick(entry) }, info, spark));
+}
+
+let hits = [];
+const loadIndex = () => index ??= !searchUrl ? Promise.resolve(null)
+  : fetch(searchUrl).then((res) => res.ok ? res.json() : Promise.reject(new Error(`search ${res.status}`)))
+    .then((entries) => entries.map((e) => ({ ...e, key: fold(e.name) })))
+    .catch(() => { index = null; return null; });
+
+async function showResults() {
+  const query = fold(searchInput.value.trim());
+  $('search-clear').hidden = !searchInput.value;
+  if (!query || !searchUrl) return void ($('search-results').hidden = true);
+  const entries = await loadIndex();
+  if (query !== fold(searchInput.value.trim())) return; // typed on while loading
+  // Names starting with the query first, then names containing it.
+  const starts = [], contains = [];
+  for (const e of entries || []) {
+    const at = e.key.indexOf(query);
+    if (at === 0) starts.push(e);
+    else if (at > 0) contains.push(e);
+  }
+  hits = starts.concat(contains);
+  sparkObserver.disconnect();
+  $('search-list').replaceChildren(...hits.slice(0, 20).map(resultRow));
+  $('search-footer').textContent = !entries ? 'Søket krever nettilkobling første gang.'
+    : !hits.length ? 'Ingen treff.'
+    : hits.length > 20 ? `20 av ${hits.length} stier · skriv mer for å snevre inn`
+    : hits.length === 1 ? '1 sti' : `${hits.length} stier`;
+  $('search-results').hidden = false;
+}
+
+// fromMap: tapped on the map, which already shows and highlights it, so leave the view alone.
+function pick(entry, fromMap = false) {
+  searchInput.value = entry.name;
+  searchInput.blur();
+  $('search-results').hidden = true;
+  $('search-clear').hidden = false;
+  $('card-length').textContent = km(entry.length_m);
+  $('card-ascent').textContent = entry.ascent_m == null ? '–' : `↑ ${entry.ascent_m} m`;
+  $('card-descent').textContent = entry.descent_m == null ? '–' : `↓ ${entry.descent_m} m`;
+  $('card-grades').replaceChildren(...gradeChips(entry.grades, true));
+  $('card-profile').replaceChildren();
+  $('card-grade-bar').replaceChildren();
+  $('card-axis-end').textContent = '';
+  $('pill-text').textContent = [km(entry.length_m), entry.ascent_m == null ? '' : `↑${entry.ascent_m} m`].filter(Boolean).join(' · ');
+  picked = entry;
+  cardProfile = null;
+  $('card-cursor').hidden = true;
+  profile(entry.id).then((data) => {
+    if (picked !== entry || !data) return;
+    const { elevation, grades } = data;
+    const end = elevation[elevation.length - 1][0];
+    cardProfile = { elevation, grades, ...drawProfile($('card-profile'), elevation) };
+    // The trail's grade along its length, coloured like the lines; ungraded stretches stay faint.
+    $('card-grade-bar').replaceChildren(...grades.map(([from, grade], i) => {
+      const seg = el('span', { title: grade ? `S${grade}` : 'Ugradert' });
+      seg.style.flexGrow = Math.max((grades[i + 1]?.[0] ?? end) - from, 0);
+      seg.style.background = gradeColor(grade);
+      return seg;
+    }));
+    $('card-axis-end').textContent = km(end);
+  });
+  showCard();
+  if (fromMap) return;
+  const [w, s, e, n] = entry.bbox;
+  map.fitBounds([[w, s], [e, n]], {
+    padding: { top: 70, bottom: cardMinimized ? 80 : card.offsetHeight + 40, left: 48, right: 48 },
+    maxZoom: 16,
+  });
+  // ponytail: select highlights by name, so same-named trails in view light up too.
+  map.once('idle', () => selectTrail?.(entry.name));
+}
+
+function showCard() {
+  card.hidden = cardMinimized;
+  $('trail-pill').hidden = !cardMinimized;
+  $('card-cursor').hidden = true;
+}
+
+function hideCard() {
+  picked = null;
+  card.hidden = $('trail-pill').hidden = true;
+}
+
+function clearSearch() {
+  searchInput.value = '';
+  hideCard();
+  $('search-results').hidden = true;
+  $('search-clear').hidden = true;
+  selectTrail?.(null);
+}
+
+searchInput.addEventListener('input', () => {
+  if (picked) { hideCard(); selectTrail?.(null); } // editing the picked name starts over
+  showResults();
+});
+searchInput.addEventListener('focus', () => { if (!picked) showResults(); });
+searchInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') { clearSearch(); searchInput.blur(); } });
+$('search').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (hits[0] && !$('search-results').hidden) pick(hits[0]);
+});
+$('search-clear').addEventListener('click', () => { clearSearch(); searchInput.focus(); });
+// Tapping the map closes the list; tapping elsewhere on it also ends the picked trail, since
+// the map's own tap handler then selects whatever was tapped.
+map.on('click', () => { $('search-results').hidden = true; });
+
+// A trail tapped on the map gets the same card as a search hit. Same-named trails elsewhere are
+// separate entries: take the one whose bbox holds the tap, else the nearest. Tapping off any
+// trail closes the card.
+async function tapTrail(name, { lng, lat }) {
+  selectTrail?.(name);
+  const close = () => { hideCard(); searchInput.value = ''; $('search-clear').hidden = true; };
+  if (!name) return close();
+  const distance = ({ bbox: [w, s, e, n] }) => Math.hypot(Math.max(w - lng, 0, lng - e), Math.max(s - lat, 0, lat - n));
+  const entry = (await loadIndex())?.filter((e) => e.name === name)
+    .reduce((best, e) => !best || distance(e) < distance(best) ? e : best, null);
+  if (!entry) return close(); // no index (old release, offline): the highlight alone
+  pick(entry, true);
+}
+$('card-min').addEventListener('click', () => { cardMinimized = true; showCard(); });
+$('trail-pill').addEventListener('click', () => { cardMinimized = false; showCard(); });
+
+// Point at (mouse) or drag a finger along the profile: a marker with the height there.
+let cardProfile = null; // { elevation, grades, low, scale, end } of the card's profile
+function scrub(event) {
+  if (!cardProfile) return;
+  const { elevation, grades, low, scale, end } = cardProfile;
+  const box = $('card-profile').getBoundingClientRect();
+  const x = Math.min(Math.max(event.clientX - box.left, 0), box.width);
+  const at = x / box.width * end;
+  const i = Math.max(elevation.findIndex(([d]) => d >= at), 1);
+  const [d0, e0] = elevation[i - 1], [d1, e1] = elevation[i];
+  const height = e0 + (e1 - e0) * ((at - d0) / (d1 - d0 || 1));
+  const grade = grades.findLast(([from]) => from <= at)?.[1];
+  const cursor = $('card-cursor'), tip = $('card-cursor-tip');
+  cursor.hidden = false;
+  cursor.style.left = `${x}px`;
+  cursor.style.setProperty('--y', `${(29 - (height - low) * scale) / 30 * box.height}px`);
+  tip.replaceChildren(el('b', { textContent: `${Math.round(height)} moh.` }),
+    el('span', { textContent: `ved ${km(at)}${grade ? ` · S${grade}` : ''}` }));
+  // Centred on the marker, but kept inside the card.
+  const width = tip.offsetWidth;
+  tip.style.transform = `translateX(${Math.min(Math.max(x - width / 2, 0), box.width - width) - x}px)`;
+}
+const profileWrap = $('card-profile-wrap');
+profileWrap.addEventListener('pointerdown', (e) => { profileWrap.setPointerCapture(e.pointerId); scrub(e); });
+profileWrap.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'mouse' || profileWrap.hasPointerCapture(e.pointerId)) scrub(e);
+});
+const endScrub = (e) => { if (e.pointerType !== 'mouse' || e.type === 'pointerleave') $('card-cursor').hidden = true; };
+for (const type of ['pointerup', 'pointercancel', 'pointerleave']) profileWrap.addEventListener(type, endScrub);
+
+// iOS keeps the layout viewport under the keyboard; the visual viewport is what's left above it.
+window.visualViewport?.addEventListener('resize', () => {
+  document.documentElement.style.setProperty('--vvh', `${visualViewport.height}px`);
+});
 
 // ---------- service worker ----------
 if ('serviceWorker' in navigator) {

@@ -1,3 +1,4 @@
 .idea/
 deploy/rocky-linux/.env
 deploy/rocky-linux/site/
+deploy/rocky-linux/tiles/dem/

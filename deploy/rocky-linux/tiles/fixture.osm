@@ -9,6 +9,7 @@
   <node id="13" lat="60.0410" lon="10.8600"/><node id="14" lat="60.0420" lon="10.8640"/>
   <node id="15" lat="60.0430" lon="10.8600"/><node id="16" lat="60.0440" lon="10.8640"/>
   <node id="17" lat="60.0450" lon="10.8600"/><node id="18" lat="60.0460" lon="10.8640"/>
+  <node id="19" lat="60.0600" lon="10.8600"/><node id="20" lat="60.0610" lon="10.8640"/>
   <way id="101"><nd ref="1"/><nd ref="2"/><tag k="highway" v="path"/><tag k="name" v="Named path"/><tag k="mtb:scale" v="1"/></way>
   <way id="102"><nd ref="3"/><nd ref="4"/><tag k="highway" v="track"/><tag k="tracktype" v="grade3"/></way>
   <way id="103"><nd ref="5"/><nd ref="6"/><tag k="highway" v="bridleway"/></way>
@@ -18,6 +19,7 @@
   <way id="108"><nd ref="15"/><nd ref="16"/><tag k="highway" v="path"/><tag k="mtb:name" v="MTB-only name"/></way>
   <way id="109"><nd ref="16"/><nd ref="17"/><tag k="highway" v="path"/><tag k="mtb:name" v="MTB-only name"/></way>
   <way id="110"><nd ref="17"/><nd ref="18"/><tag k="highway" v="path"/><tag k="mtb:name" v="MTB-only name"/><tag k="mtb:scale" v="2"/></way>
+  <way id="111"><nd ref="19"/><nd ref="20"/><tag k="highway" v="path"/><tag k="name" v="Named path"/></way>
   <way id="107"><nd ref="13"/><nd ref="14"/><tag k="highway" v="residential"/></way>
   <relation id="201"><member type="way" ref="102" role=""/><tag k="type" v="route"/><tag k="route" v="mtb"/><tag k="name" v="Pionéren"/></relation>
   <relation id="202"><member type="way" ref="102" role=""/><member type="way" ref="108" role=""/><member type="way" ref="109" role=""/><member type="way" ref="110" role=""/><tag k="type" v="route"/><tag k="route" v="mtb"/><tag k="name" v="Big race"/></relation>

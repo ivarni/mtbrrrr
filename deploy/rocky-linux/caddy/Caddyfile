@@ -16,10 +16,11 @@
 	# Nothing here is content-hashed. A long max-age on sw.js would leave browsers running an
 	# old service worker that then serves a stale app shell — the app can pin itself to an old
 	# version indefinitely. no-cache means "revalidate every time" (a 304 with ETags).
-	@pmtiles path /data/*/trails.pmtiles
-	@other_assets not path /data/*/trails.pmtiles
+	# A release's data never changes under its name, so it can be cached for good.
+	@release path /data/*/trails.pmtiles /data/*/search.json /data/*/profiles/*
+	@other_assets not path /data/*/trails.pmtiles /data/*/search.json /data/*/profiles/*
 	header @other_assets Cache-Control "no-cache"
-	header @pmtiles Cache-Control "public, max-age=31536000, immutable"
+	header @release Cache-Control "public, max-age=31536000, immutable"
 
 	# The privacy gate is optional and defaults to ON. SITE_AUTH_SNIPPET (from .env) picks which
 	# file gets inlined here: auth-on.conf (basic_auth, the default when the var is unset) or

@@ -3,7 +3,7 @@
 // keep-list, so install() refetches the shell instead of relying on stale-while-revalidate to
 // notice. Leave TILE_CACHE alone — renaming it would throw away the map tiles, DEM and trail
 // data that make cached areas work offline.
-const APP_CACHE = 'app-v29';
+const APP_CACHE = 'app-v30';
 const TILE_CACHE = 'tiles-v1';
 
 // Local app shell to precache on install.
@@ -54,7 +54,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (TILE_HOSTS.includes(url.hostname)) {
+  // A release's search index and profiles never change under its name: cache each on first use,
+  // so repeat searches skip the network. Fixtures (under /deploy/) rebuild in place and fall through.
+  // ponytail: old releases' entries stay in TILE_CACHE; prune by release if storage gets tight.
+  if (TILE_HOSTS.includes(url.hostname) || /^\/data\/[^/]+\/(search\.json$|profiles\/)/.test(url.pathname)) {
     event.respondWith(cacheFirst(req, TILE_CACHE));
     return;
   }

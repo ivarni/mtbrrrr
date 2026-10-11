@@ -1,7 +1,8 @@
 {
+  "lang": "nb",
   "name": "mtbrrrr",
   "short_name": "mtbrrrr",
-  "description": "Private MTB trail map — fast, offline-friendly.",
+  "description": "Privat stikart for terrengsykling, raskt og brukbart uten nett.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

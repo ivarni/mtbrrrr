@@ -7,6 +7,7 @@ site="$root/deploy/rocky-linux/site/data"
 source_url=${1:-https://download.geofabrik.de/europe/norway-latest.osm.pbf}
 release=${2:-$(date -u +%F)}
 source_timestamp=${3:-}
+dem=${DEM:-$tiles/dem}
 staging="$site/.staging-$release"
 pbf="$tiles/${source_url##*/}"
 download="$pbf.$$"
@@ -14,6 +15,7 @@ container=""
 iostat_pid=""
 [ ! -e "$site/$release" ] || { echo "release already exists: $release" >&2; exit 1; }
 [ ! -e "$staging" ] || { echo "staging directory already exists: $staging" >&2; exit 1; }
+ls "$dem"/*.tif >/dev/null 2>&1 || { echo "no DTM10 GeoTIFFs in $dem (see README: Search index)" >&2; exit 1; }
 [ -r /proc/pressure/io ] || command -v iostat >/dev/null || { echo "install sysstat: sudo dnf install -y sysstat" >&2; exit 1; }
 mkdir -p "$staging" "$tiles/.store"
 trap 'rm -rf "$staging" "$download"; [ -z "$iostat_pid" ] || kill "$iostat_pid" >/dev/null 2>&1 || true; [ -z "$container" ] || docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
@@ -61,10 +63,12 @@ container=""
 printf 'started=%s\nfinished=%s\n' "$started" "$(date -u +%FT%TZ)" > "$staging/build-time.txt"
 
 docker run --rm -v "$staging:/out:ro" ghcr.io/protomaps/go-pmtiles@sha256:06574f01f55a78f78f887bc7ebf729a5c093c0d6e17d9876300cfcb0758b59d3 verify /out/trails.pmtiles
+"$tiles/build-search.sh" "$pbf" "$staging/search" "$dem"
 mkdir "$site/$release"
 mv "$staging/trails.pmtiles" "$site/$release/trails.pmtiles"
+mv "$staging/search/search.json" "$staging/search/profiles" "$site/$release/"
 cp "$staging/build-time.txt" "$staging/tilemaker-stats.tsv" "$site/$release/"
 [ ! -f "$staging/host-iostat.txt" ] || cp "$staging/host-iostat.txt" "$site/$release/"
-printf '{"source":"%s","sourceTimestamp":"%s","started":"%s","archive":"%s/trails.pmtiles"}\n' "$source_url" "$source_timestamp" "$started" "$release" > "$staging/latest.json"
+printf '{"source":"%s","sourceTimestamp":"%s","started":"%s","archive":"%s/trails.pmtiles","search":"%s/search.json"}\n' "$source_url" "$source_timestamp" "$started" "$release" "$release" > "$staging/latest.json"
 cp "$staging/latest.json" "$site/$release/latest.json"
 mv "$staging/latest.json" "$site/latest.json"
