@@ -28,6 +28,7 @@ if [ -z "$dem" ]; then
   mkdir -p "$dem"
   [ "$name" = fixture ] && heights=synthetic || heights=kartverket
   docker run --rm -v "$tiles:/tiles:ro" -v "$dem:/dem" python:3.13-slim sh -ceu "
+    apt-get update -qq && apt-get install -y -qq libexpat1 >/dev/null  # rasterio wheels link it; slim lacks it
     pip install -q --root-user-action=ignore rasterio==1.4.4
     python -I /tiles/fixture-dem.py $bbox /dem $heights"
 fi
