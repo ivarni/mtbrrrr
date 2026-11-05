@@ -214,6 +214,21 @@ map.on('moveend', () => {
   wasInNorway = now;
 });
 
+// Grade colours (S0–S6) and way type patterns, shared by the map layers, chips and legend.
+const GRADE_COLORS = ['#22c55e', '#3b82f6', '#ef4444', '#4b5563', '#facc15', '#facc15', '#facc15'];
+// S4+ is yellow with black dashes on the map; the chips and grade bar get yellow-black stripes.
+const HARD_GRADE = 'repeating-linear-gradient(90deg, #facc15 0 3px, #111 0 6px)';
+const gradeColor = (grade) => {
+  if (grade === '') return 'rgba(255,255,255,.2)';
+  const g = parseInt(grade, 10);
+  return g >= 4 && g <= 6 ? HARD_GRADE : GRADE_COLORS[g] || '#9ca3af';
+};
+// Patterns in line-width units. hard is the black dash over S4+; the rest are way types.
+const WAY_DASH = {
+  hard: [2, 2], path: [0, 2], grade2: [3, 2], grade3: [3, 2, 0.8, 2], grade4: [2, 1.5, 0.8, 1.5, 0.8, 1.5],
+  grade5: [0.8, 1.5, 3, 1.5], bridleway: [4, 2],
+};
+
 // ---------- layers added once style is ready ----------
 // style.load, not load: load waits for base tiles, fonts and sprites, delaying the first trail tile.
 map.once('style.load', async () => {
@@ -285,15 +300,9 @@ map.once('style.load', async () => {
   const baseLayers = map.getStyle().layers;
   const lastLine = baseLayers.findLastIndex((l) => l.type === 'line' && !/border/i.test(l.id));
   const belowLabels = baseLayers.slice(lastLine + 1).find((l) => l.type === 'symbol')?.id;
-  const TRAIL_COLOR = [
-    'match', ['get', 'grade'],
-    '0', '#22c55e',   // green
-    '1', '#3b82f6',   // blue
-    '2', '#ef4444',   // red
-    '3', '#4b5563',   // dark grey, so the black way pattern stays visible
-    '4', '#facc15', '5', '#facc15', '6', '#facc15', // yellow base under black dashes
-    /* fallback: untagged */ '#9ca3af',
-  ];
+  // Green, blue, red, dark grey (so the black way pattern stays visible), then yellow under
+  // black dashes for S4–S6; grey fallback.
+  const TRAIL_COLOR = ['match', ['get', 'grade'], ...GRADE_COLORS.flatMap((c, i) => [String(i), c]), '#9ca3af'];
   // Fade lines poor for MTB (class:bicycle:mtb < 0) so they recede.
   const TRAIL_OPACITY = ['case', ['<', ['to-number', ['get', 'mtbclass'], 0], 0], 0.4, 1];
 
@@ -329,7 +338,7 @@ map.once('style.load', async () => {
     { 'line-color': TRAIL_COLOR, 'line-width': BASE_WIDTH, 'line-opacity': TRAIL_OPACITY });
   // Black dashes over the yellow base → black-with-yellow-stripes for grade 4+.
   addDetailLine('trails-line-hard', ['in', ['get', 'grade'], ['literal', ['4', '5', '6']]],
-    { 'line-color': '#111111', 'line-width': BASE_WIDTH, 'line-opacity': TRAIL_OPACITY, 'line-dasharray': [2, 2] }, 'butt');
+    { 'line-color': '#111111', 'line-width': BASE_WIDTH, 'line-opacity': TRAIL_OPACITY, 'line-dasharray': WAY_DASH.hard }, 'butt');
 
   // The way TYPE as a black pattern, like mtbmap.no's "Ways" legend. line-dasharray can't
   // be data-driven, so each pattern is its own layer. dash is in line-width units, or null
@@ -342,15 +351,15 @@ map.once('style.load', async () => {
   const isTrack = ['==', ['get', 'highway'], 'track'];
   const trackGrade = (g) => ['all', isTrack, ['==', ['get', 'tracktype'], g]];
   // Path/Trail + Footway → dotted.
-  addTrailLine('trails-path', ['in', ['get', 'highway'], ['literal', ['path', 'footway']]], [0, 2], 'round');
+  addTrailLine('trails-path', ['in', ['get', 'highway'], ['literal', ['path', 'footway']]], WAY_DASH.path, 'round');
   // Tracks → solid (G1/ungraded, smooth & firm) grading to broken (G5, bumpy/loose).
   addTrailLine('trails-track-g1', ['all', isTrack, ['in', ['get', 'tracktype'], ['literal', ['grade1', '']]]], null, 'round');
-  addTrailLine('trails-track-g2', trackGrade('grade2'), [3, 2]);
-  addTrailLine('trails-track-g3', trackGrade('grade3'), [3, 2, 0.8, 2]);
-  addTrailLine('trails-track-g4', trackGrade('grade4'), [2, 1.5, 0.8, 1.5, 0.8, 1.5]);
-  addTrailLine('trails-track-g5', trackGrade('grade5'), [0.8, 1.5, 3, 1.5]);
+  addTrailLine('trails-track-g2', trackGrade('grade2'), WAY_DASH.grade2);
+  addTrailLine('trails-track-g3', trackGrade('grade3'), WAY_DASH.grade3);
+  addTrailLine('trails-track-g4', trackGrade('grade4'), WAY_DASH.grade4);
+  addTrailLine('trails-track-g5', trackGrade('grade5'), WAY_DASH.grade5);
   // Bridleway → dashed; Cycleway → solid.
-  addTrailLine('trails-bridleway', ['==', ['get', 'highway'], 'bridleway'], [4, 2]);
+  addTrailLine('trails-bridleway', ['==', ['get', 'highway'], 'bridleway'], WAY_DASH.bridleway);
   addTrailLine('trails-cycleway', ['==', ['get', 'highway'], 'cycleway'], null, 'round');
 
   // Trail names on the line, like mtbmap.no: the way's own name (mtb:name first, riders'
@@ -487,8 +496,6 @@ release.then(({ search }) => {
   $('search').hidden = false;
 }).catch(() => {});
 
-const GRADE_COLORS = ['#22c55e', '#3b82f6', '#ef4444', '#4b5563', '#facc15', '#facc15', '#facc15'];
-const gradeColor = (grade) => grade === '' ? 'rgba(255,255,255,.2)' : GRADE_COLORS[parseInt(grade, 10)] || '#9ca3af';
 // Case- and accent-blind: "e" finds "é", "a" finds "å" (ø and æ are letters of their own).
 const fold = (text) => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 const km = (m) => m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(m < 10000 ? 1 : 0).replace('.', ',')} km`;
@@ -509,6 +516,67 @@ const gradeChips = (grades, withLength) => Object.entries(grades.scale || {}).ma
   return chip;
 });
 const climb = ({ ascent_m: up, descent_m: down }) => up == null ? '' : `↑${up}  ↓${down} m`;
+
+// Legend: each swatch redraws a short stretch of trail the way the map's layers stack it,
+// at roughly z14 widths: MTB-rating halo, grade line (faded when poor for MTB), S4+ black
+// dashes, way-type pattern. pattern is a WAY_DASH entry, or null for a solid line.
+const swatch = ({ halo, grade, faded, pattern, bare }) => {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 40 14');
+  svg.setAttribute('class', 'swatch');
+  svg.setAttribute('aria-hidden', 'true');
+  // bare: no light backdrop, which would read as an edge around the line.
+  if (bare) svg.style.background = 'none';
+  const line = (color, width, dash, cap = 'round') => {
+    const p = svgPath('M5 7H35');
+    Object.entries({ stroke: color, 'stroke-width': width, 'stroke-linecap': cap, opacity: faded ? 0.4 : 1,
+      ...(dash && { 'stroke-dasharray': dash.map((d) => d * width).join(' ') }) })
+      .forEach(([k, v]) => p.setAttribute(k, v));
+    svg.append(p);
+  };
+  if (halo) line('#facc15', 12);
+  if (grade != null) line(GRADE_COLORS[grade], 6);
+  if (grade >= 4) line('#111', 6, WAY_DASH.hard, 'butt');
+  if (pattern !== undefined) line('#111', 2, pattern, !pattern || pattern[0] === 0 ? 'round' : 'butt');
+  return svg;
+};
+const LEGEND = [
+  ['Gradering', [
+    [{ grade: 0 }, 'S0 – Lett: jevnt underlag, ingen hindringer'],
+    [{ grade: 1 }, 'S1 – Middels: løst underlag, små røtter og steiner'],
+    [{ grade: 2 }, 'S2 – Krevende: større røtter og steiner, trinn'],
+    [{ grade: 3 }, 'S3 – Vanskelig: store steiner, trange svinger, bratt'],
+    [{ grade: 4 }, 'S4–S6 – Ekstrem: trial-teknikk, S6 knapt sykkelbar'],
+    [{ pattern: WAY_DASH.path }, 'Ugradert: vanskelighet ukjent'],
+  ]],
+  ['Sykkelvennlighet', [
+    [{ halo: true, grade: 1 }, 'Gul kant: anbefalt for terrengsykling'],
+    [{ faded: true, grade: 1 }, 'Blek: dårlig for sykling'],
+    [{ grade: 1, bare: true }, 'Ingen kant: nøytral eller ikke vurdert'],
+  ]],
+  ['Veitype (zoom inn for å se)', [
+    [{ pattern: WAY_DASH.path }, 'Sti eller gangvei'],
+    [{ pattern: null }, 'Sykkelvei, eller traktorvei (fast/ukjent dekke)'],
+    [{ pattern: WAY_DASH.grade2 }, 'Traktorvei, stort sett fast'],
+    [{ pattern: WAY_DASH.grade3 }, 'Traktorvei, blandet dekke'],
+    [{ pattern: WAY_DASH.grade4 }, 'Traktorvei, stort sett mykt dekke'],
+    [{ pattern: WAY_DASH.grade5 }, 'Traktorvei, mykt dekke (jord/gress)'],
+    [{ pattern: WAY_DASH.bridleway }, 'Ridesti'],
+  ]],
+];
+$('legend').replaceChildren(...LEGEND.flatMap(([title, rows]) => [
+  el('h2', { textContent: title }),
+  el('ul', {}, ...rows.map(([look, text]) => el('li', {}, swatch(look), text))),
+]));
+const showLegend = (open) => {
+  $('legend').hidden = !open;
+  $('legend-toggle').setAttribute('aria-expanded', open);
+};
+$('legend-toggle').addEventListener('click', () => showLegend($('legend').hidden));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('legend').hidden) { showLegend(false); $('legend-toggle').focus(); }
+});
+map.on('click', () => showLegend(false));
 
 const profile = (id) => {
   if (!profiles.has(id)) {

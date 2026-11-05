@@ -97,6 +97,19 @@
       font-size: 11px; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
     .cursor-tip b { font-size: 15px; }
     .card-actions { display: flex; gap: 8px; }
+    /* Legend: a button under the search pill on the right, the panel opening below it. */
+    #legend-toggle { position: absolute; z-index: 2; right: 10px; top: calc(62px + env(safe-area-inset-top));
+      width: 36px; height: 36px; border: 0; border-radius: 18px; font: inherit; font-size: 17px; font-weight: 700;
+      cursor: pointer; }
+    #legend { position: absolute; z-index: 2; right: 10px; top: calc(106px + env(safe-area-inset-top));
+      width: min(320px, calc(100vw - 20px)); padding: 4px 14px 12px; border-radius: 16px; overflow-y: auto;
+      overscroll-behavior: contain; max-height: calc(100dvh - 140px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+    #legend h2 { margin: 12px 0 6px; font-size: 12px; font-weight: 600; color: #9ca3af;
+      text-transform: uppercase; letter-spacing: .04em; }
+    #legend ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    #legend li { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+    /* Map-coloured backdrop so black way patterns read on the dark panel. */
+    .swatch { flex: none; width: 40px; height: 14px; border-radius: 4px; background: #eeeae0; }
     .trail-end { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; box-sizing: border-box;
       box-shadow: 0 1px 4px rgba(0,0,0,.45); display: grid; place-items: center; }
     .trail-end.start { background: #16a34a; color: #fff; }
@@ -150,6 +163,10 @@
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg>
   </button>
+
+  <button id="legend-toggle" class="panel" type="button" aria-label="Tegnforklaring" title="Tegnforklaring"
+    aria-expanded="false" aria-controls="legend">?</button>
+  <div id="legend" class="panel" role="region" aria-label="Tegnforklaring" hidden></div>
 
   <!-- Fetch app.js's libraries in parallel with app.js instead of after it. -->
   <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/+esm" />
