@@ -471,9 +471,7 @@ map.once('style.load', async () => {
     picker = new maplibregl.Popup({ maxWidth: '260px' }).setLngLat(lngLat).setDOMContent(list).addTo(map);
   });
 
-  status(vectorTrails
-    ? 'Klar. Kartet dekker bare Norge.'
-    : 'Stidata krever nettilkobling.', !vectorTrails);
+  if (!vectorTrails) status('Stidata krever nettilkobling.', true);
 });
 
 const emptyFC = () => ({ type: 'FeatureCollection', features: [] });
