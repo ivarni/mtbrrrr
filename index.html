@@ -104,6 +104,11 @@
     #legend { position: absolute; z-index: 2; right: 10px; top: calc(106px + env(safe-area-inset-top));
       width: min(320px, calc(100vw - 20px)); padding: 4px 14px 12px; border-radius: 16px; overflow-y: auto;
       overscroll-behavior: contain; max-height: calc(100dvh - 140px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+    /* Wide screens: the search pill stops at 490px, so the button fits on its row. */
+    @media (min-width: 600px) {
+      #legend-toggle { top: calc(12px + env(safe-area-inset-top)); }
+      #legend { top: calc(56px + env(safe-area-inset-top)); max-height: calc(100dvh - 90px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+    }
     #legend h2 { margin: 12px 0 6px; font-size: 12px; font-weight: 600; color: #9ca3af;
       text-transform: uppercase; letter-spacing: .04em; }
     #legend ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
