@@ -228,6 +228,7 @@ reads the Geofabrik PBF replication timestamp itself and records it in the manif
 
 It downloads a fresh PBF, builds directly to `site/data/<release>/trails.pmtiles`, and samples
 Tilemaker's cgroup memory, CPU, and block I/O every two seconds in `tilemaker-stats.tsv`.
+Tilemaker's own output is kept in `tilemaker.log`.
 Each sample also records Tilemaker's `--store` plus staging-disk use. On hosts with kernel I/O
 pressure support it records pressure averages; otherwise it records host disk metrics in
 `host-iostat.txt` and requires `sysstat`. `build-time.txt` records the build start and finish.
@@ -263,6 +264,55 @@ against the PBF without rebuilding:
 ```sh
 ./tiles/verify-norway.sh <release>
 ```
+
+### Nightly refresh
+
+`tiles/nightly.sh` runs `build-norway.sh` with defaults (today's UTC date as the release, the
+latest Geofabrik PBF), then deletes all but the newest `KEEP` (default 3) dated releases, never
+the one `latest.json` points at. Clients pick up the new `latest.json` on their next load. A
+failed build leaves the previous release live. Run it once by hand first so you know how long it
+takes on this box.
+
+Install as a systemd timer running as `joms` (adjust the path to your checkout):
+
+```sh
+sudo tee /etc/systemd/system/mtbrrrr-nightly.service >/dev/null <<'EOF'
+[Unit]
+Description=mtbrrrr nightly Norway trail build
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=joms
+ExecStart=/home/joms/code/mtbrrrr/deploy/rocky-linux/tiles/nightly.sh
+Nice=10
+IOSchedulingClass=idle
+EOF
+
+sudo tee /etc/systemd/system/mtbrrrr-nightly.timer >/dev/null <<'EOF'
+[Unit]
+Description=Run the mtbrrrr Norway build every night
+
+[Timer]
+OnCalendar=*-*-* 03:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now mtbrrrr-nightly.timer
+systemctl list-timers mtbrrrr-nightly.timer      # next run
+sudo systemctl start mtbrrrr-nightly.service     # run now (blocks until done)
+journalctl -u mtbrrrr-nightly -e                 # logs
+```
+
+Geofabrik publishes the Norway extract late each evening (UTC), so 03:30 picks up that day's
+data. Only one copy can run at a time (a running oneshot is not started again). If the timer
+fires twice on the same UTC date, the second run stops with "release already exists".
 
 ## Reboot / persistence
 

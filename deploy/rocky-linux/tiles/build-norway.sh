@@ -20,7 +20,7 @@ ls "$dem"/*.tif >/dev/null 2>&1 || { echo "no DTM10 GeoTIFFs in $dem (see README
 mkdir -p "$staging" "$tiles/.store"
 trap 'rm -rf "$staging" "$download"; [ -z "$iostat_pid" ] || kill "$iostat_pid" >/dev/null 2>&1 || true; [ -z "$container" ] || docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
 
-curl --fail --location --output "$download" "$source_url"
+curl --fail --silent --show-error --location --output "$download" "$source_url"
 mv "$download" "$pbf"
 if [ -z "$source_timestamp" ]; then
   source_timestamp=$(docker run --rm -v "$tiles:/data:ro" debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 \
@@ -67,7 +67,7 @@ docker run --rm -v "$staging:/out:ro" ghcr.io/protomaps/go-pmtiles@sha256:06574f
 mkdir "$site/$release"
 mv "$staging/trails.pmtiles" "$site/$release/trails.pmtiles"
 mv "$staging/search/search.json" "$staging/search/profiles" "$site/$release/"
-cp "$staging/build-time.txt" "$staging/tilemaker-stats.tsv" "$site/$release/"
+cp "$staging/build-time.txt" "$staging/tilemaker-stats.tsv" "$staging/tilemaker.log" "$site/$release/"
 [ ! -f "$staging/host-iostat.txt" ] || cp "$staging/host-iostat.txt" "$site/$release/"
 printf '{"source":"%s","sourceTimestamp":"%s","started":"%s","archive":"%s/trails.pmtiles","search":"%s/search.json"}\n' "$source_url" "$source_timestamp" "$started" "$release" "$release" > "$staging/latest.json"
 cp "$staging/latest.json" "$site/$release/latest.json"
