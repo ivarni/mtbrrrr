@@ -296,7 +296,7 @@ sudo tee /etc/systemd/system/mtbrrrr-nightly.timer >/dev/null <<'EOF'
 Description=Run the mtbrrrr Norway build every night
 
 [Timer]
-OnCalendar=*-*-* 03:30
+OnCalendar=*-*-* 06:00
 Persistent=true
 
 [Install]
@@ -310,8 +310,8 @@ sudo systemctl start mtbrrrr-nightly.service     # run now (blocks until done)
 journalctl -u mtbrrrr-nightly -e                 # logs
 ```
 
-Geofabrik publishes the Norway extract late each evening (UTC), so 03:30 picks up that day's
-data. Only one copy can run at a time (a running oneshot is not started again). If the timer
+The Geofabrik extract lags about a day (the 2026-11-05 build had OSM data up to 2026-11-03 21:24 UTC),
+and a full build takes a few minutes, so 06:00 leaves time for the night's extract to land. Only one copy can run at a time (a running oneshot is not started again). If the timer
 fires twice on the same UTC date, the second run stops with "release already exists".
 
 ## Reboot / persistence
